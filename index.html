@@ -135,8 +135,8 @@
   scene.fog = new THREE.FogExp2(0xc8d8e8, 0.004);
 
   // ── Camera ──────────────────────────────────────────────────────────────────
-  const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.05, 500);
-  camera.position.set(0, 1.65, 8); // outside, looking at house
+  const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.05, 800);
+  camera.position.set(0, 1.65, -25); // outside front, looking at house
 
   // ── Post-processing ─────────────────────────────────────────────────────────
   const composer = new EffectComposer(renderer);
@@ -177,8 +177,10 @@
   scene.add(sun);
 
   // ── Placeholder house (to be replaced by scene.js) ──────────────────────────
-  import('./scene.js').then(({ buildHouse }) => {
+  let getRoomLabel = null;
+  import('./scene.js').then(({ buildHouse, getRoomLabel: grl }) => {
     buildHouse(scene);
+    getRoomLabel = grl;
     scene.traverse(obj => {
       if (obj.isMesh) { obj.castShadow = true; obj.receiveShadow = true; }
     });
@@ -190,8 +192,8 @@
   let locked = false;
   let yaw = 0, pitch = 0;
   const velocity = new THREE.Vector3();
-  const SPEED = 3.5;
-  const SPRINT = 6.0;
+  const SPEED = 5.0;
+  const SPRINT = 11.0;
 
   document.addEventListener('keydown', e => keys[e.code] = true);
   document.addEventListener('keyup',   e => keys[e.code] = false);
@@ -236,6 +238,13 @@
     camera.rotation.order = 'YXZ';
     camera.rotation.y = yaw;
     camera.rotation.x = pitch;
+
+    // Room label HUD
+    if (getRoomLabel) {
+      const label = getRoomLabel(camera.position.x, camera.position.z, camera.position.y);
+      const el = document.getElementById('room-label');
+      if (el) el.textContent = label;
+    }
 
     composer.render();
   }
