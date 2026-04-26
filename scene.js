@@ -238,7 +238,7 @@ function buildEntryHall(scene, fh) {
   partW.position.set(-6, fh/2, -5);
   scene.add(partW);
   const hallFloor = plane(14, 8, P.stoneDk);
-  hallFloor.position.set(0, 0.02, -8.5);
+  hallFloor.position.set(0, 0.04, -8.5);
   scene.add(hallFloor);
   // Coat rack
   const rack = box(1.4, 0.05, 0.06, P.timber);
@@ -271,7 +271,7 @@ function buildLivingRoom(scene, fh) {
   }
   // Area rug
   const rug = plane(8, 6, 0x7a5a48);
-  rug.position.set(-13, 0.03, 2);
+  rug.position.set(-13, 0.06, 2);
   scene.add(rug);
   // Sofa — L-shaped
   const sofaBody = box(5, 0.7, 2.2, 0x5a7a8a);
@@ -348,7 +348,7 @@ function buildLivingRoom(scene, fh) {
 
 function buildKitchen(scene, fh) {
   const kFloor = plane(16, 16, P.marble);
-  kFloor.position.set(10, 0.02, -2);
+  kFloor.position.set(10, 0.04, -2);
   scene.add(kFloor);
   // Island
   const island = box(3.2, 0.9, 1.4, P.white);
@@ -470,7 +470,7 @@ function buildStudy(scene, fh) {
   wallW.position.set(14.1, fh/2, 7.6);
   scene.add(wallW);
   const studyFloor = plane(6, 8, P.floorWoodDk);
-  studyFloor.position.set(18, 0.02, 8);
+  studyFloor.position.set(18, 0.04, 8);
   scene.add(studyFloor);
   // Desk
   const deskTop = box(2.0, 0.04, 0.9, P.timberDk);

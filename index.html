@@ -168,11 +168,11 @@
   const sun = new THREE.DirectionalLight(0xfff8e7, 2.5);
   sun.position.copy(sunVec).multiplyScalar(100);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.near = 0.5;
-  sun.shadow.camera.far  = 200;
-  sun.shadow.camera.left = sun.shadow.camera.bottom = -30;
-  sun.shadow.camera.right = sun.shadow.camera.top   =  30;
+  sun.shadow.mapSize.set(4096, 4096);
+  sun.shadow.camera.near = 1;
+  sun.shadow.camera.far  = 500;
+  sun.shadow.camera.left = sun.shadow.camera.bottom = -120;
+  sun.shadow.camera.right = sun.shadow.camera.top   =  120;
   sun.shadow.bias = -0.001;
   scene.add(sun);
 
@@ -184,23 +184,100 @@
     scene.traverse(obj => {
       if (obj.isMesh) { obj.castShadow = true; obj.receiveShadow = true; }
     });
+    buildCollisionLists();
   });
+
+  // ── Physics & collision ──────────────────────────────────────────────────────
+  // Collected after scene loads
+  let floorMeshes = [];   // meshes that can be stood on (horizontal surfaces)
+  let wallMeshes  = [];   // meshes that block horizontal movement
+
+  const EYE_HEIGHT  = 1.65;   // m above floor
+  const STEP_UP     = 0.55;   // max step the player can climb per frame (stair height)
+  const PLAYER_R    = 0.32;   // collision radius (m)
+  const GRAVITY     = 16.0;   // m/s²
+  const SNAP_DIST   = 3.5;    // downward cast distance to look for floor
+
+  let playerY    = 1.65;  // world Y of player feet
+  let fallSpeed  = 0;     // vertical velocity (positive = falling)
+
+  const _floorRay = new THREE.Raycaster();
+  const _wallRay  = new THREE.Raycaster();
+  _floorRay.far   = SNAP_DIST;
+
+  function buildCollisionLists() {
+    scene.traverse(obj => {
+      if (!obj.isMesh) return;
+      const mat = obj.material;
+      // Skip transparent/glass and emissive-only items
+      if (mat && mat.transparent && (mat.opacity || 1) < 0.7) return;
+
+      const bb = new THREE.Box3().setFromObject(obj);
+      const size = new THREE.Vector3();
+      bb.getSize(size);
+
+      // Floor candidates: wide AND thin vertically
+      if (size.y < 0.6 && Math.max(size.x, size.z) > 0.5) {
+        floorMeshes.push(obj);
+      }
+
+      // Wall candidates: tall enough to block movement, not tiny details
+      if (size.y > 0.7 && Math.min(size.x, size.z) > 0.05 && Math.max(size.x, size.z) > 0.3) {
+        wallMeshes.push(obj);
+      }
+    });
+  }
+
+  function sampleFloor(x, z, fromY) {
+    // Cast downward from slightly above the player feet
+    _floorRay.set(new THREE.Vector3(x, fromY + 0.3, z), new THREE.Vector3(0, -1, 0));
+    const hits = _floorRay.intersectObjects(floorMeshes, false);
+    for (const h of hits) {
+      if (h.distance > 0.05) return h.point.y; // first valid hit
+    }
+    return null;
+  }
+
+function resolveMovement(cx, cz, footY, dx, dz) {
+    // Try full move first
+    if (!isBlocked(cx + dx, cz + dz, footY)) return { x: cx + dx, z: cz + dz };
+    // Try X only
+    if (!isBlocked(cx + dx, cz, footY)) return { x: cx + dx, z: cz };
+    // Try Z only
+    if (!isBlocked(cx, cz + dz, footY)) return { x: cx, z: cz + dz };
+    return { x: cx, z: cz };
+  }
+
+  function isBlocked(tx, tz, footY) {
+    // Cast rays outward in 4 cardinal directions from target position
+    // at two heights (knee and chest) to catch walls reliably
+    const checkHeights = [footY + 0.4, footY + 1.1];
+    for (const y of checkHeights) {
+      for (const dir of [
+        new THREE.Vector3(1,0,0), new THREE.Vector3(-1,0,0),
+        new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,-1)
+      ]) {
+        _wallRay.set(new THREE.Vector3(tx, y, tz), dir);
+        _wallRay.far = PLAYER_R;
+        const hits = _wallRay.intersectObjects(wallMeshes, false);
+        if (hits.length > 0 && hits[0].distance < PLAYER_R) return true;
+      }
+    }
+    return false;
+  }
 
   // ── First-person controller ─────────────────────────────────────────────────
   const overlay = document.getElementById('overlay');
   const keys = {};
   let locked = false;
   let yaw = 0, pitch = 0;
-  const velocity = new THREE.Vector3();
-  const SPEED = 5.0;
+  const SPEED  = 5.0;
   const SPRINT = 11.0;
 
   document.addEventListener('keydown', e => keys[e.code] = true);
   document.addEventListener('keyup',   e => keys[e.code] = false);
 
-  overlay.addEventListener('click', () => {
-    renderer.domElement.requestPointerLock();
-  });
+  overlay.addEventListener('click', () => renderer.domElement.requestPointerLock());
 
   document.addEventListener('pointerlockchange', () => {
     locked = document.pointerLockElement === renderer.domElement;
@@ -223,16 +300,50 @@
 
     if (locked) {
       const speed = keys['ShiftLeft'] || keys['ShiftRight'] ? SPRINT : SPEED;
-      const dir = new THREE.Vector3();
-      if (keys['KeyW'] || keys['ArrowUp'])    dir.z -= 1;
-      if (keys['KeyS'] || keys['ArrowDown'])  dir.z += 1;
-      if (keys['KeyA'] || keys['ArrowLeft'])  dir.x -= 1;
-      if (keys['KeyD'] || keys['ArrowRight']) dir.x += 1;
+      const move = new THREE.Vector3();
+      if (keys['KeyW'] || keys['ArrowUp'])    move.z -= 1;
+      if (keys['KeyS'] || keys['ArrowDown'])  move.z += 1;
+      if (keys['KeyA'] || keys['ArrowLeft'])  move.x -= 1;
+      if (keys['KeyD'] || keys['ArrowRight']) move.x += 1;
+      move.normalize().multiplyScalar(speed * delta);
+      move.applyEuler(new THREE.Euler(0, yaw, 0));
 
-      dir.normalize().multiplyScalar(speed * delta);
-      dir.applyEuler(new THREE.Euler(0, yaw, 0));
-      camera.position.add(dir);
-      camera.position.y = 1.65; // fixed eye height for now
+      const cx = camera.position.x;
+      const cz = camera.position.z;
+
+      // Wall collision — resolve movement
+      let resolved;
+      if (wallMeshes.length > 0 && (move.x !== 0 || move.z !== 0)) {
+        resolved = resolveMovement(cx, cz, playerY, move.x, move.z);
+      } else {
+        resolved = { x: cx + move.x, z: cz + move.z };
+      }
+
+      // Floor detection — look for ground below new position
+      if (floorMeshes.length > 0) {
+        const floorY = sampleFloor(resolved.x, resolved.z, playerY + STEP_UP);
+        if (floorY !== null) {
+          const targetY = floorY; // feet land here
+          // Smooth step-up / step-down
+          if (targetY > playerY + STEP_UP) {
+            // Too high to step up — don't advance horizontally
+            resolved = { x: cx, z: cz };
+          } else {
+            const dy = targetY - playerY;
+            playerY += dy * Math.min(1, 14 * delta); // smooth snap
+            fallSpeed = 0;
+          }
+        } else {
+          // No floor found — fall
+          fallSpeed += GRAVITY * delta;
+          playerY -= fallSpeed * delta;
+          playerY = Math.max(-5, playerY); // safety net
+        }
+      }
+
+      camera.position.x = resolved.x;
+      camera.position.z = resolved.z;
+      camera.position.y = playerY + EYE_HEIGHT;
     }
 
     camera.rotation.order = 'YXZ';
