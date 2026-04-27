@@ -136,7 +136,7 @@
 
   // ── Camera ──────────────────────────────────────────────────────────────────
   const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.05, 800);
-  camera.position.set(0, 1.65, -25); // outside front, looking at house
+  camera.position.set(0, 1.43, -14); // on forecourt, facing front door
 
   // ── Post-processing ─────────────────────────────────────────────────────────
   const composer = new EffectComposer(renderer);
@@ -198,7 +198,7 @@
   const GRAVITY     = 16.0;   // m/s²
   const SNAP_DIST   = 3.5;    // downward cast distance to look for floor
 
-  let playerY    = 1.65;  // world Y of player feet
+  let playerY    = -0.22;  // world Y of player feet (starts on forecourt at lawn level)
   let fallSpeed  = 0;     // vertical velocity (positive = falling)
 
   const _floorRay = new THREE.Raycaster();

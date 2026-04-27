@@ -100,18 +100,23 @@ export function buildHouse(scene) {
 }
 
 // ─── Ground & plot ───────────────────────────────────────────────────────────
+// Ground level: lawn sits at y=-0.22 so the concrete foundation slab (top=y=0)
+// forms a clean visible plinth ~22cm above the grass. All hardscape (terrace,
+// pool, driveway) is at y=0 and above — sits naturally on the plinth level.
+const GROUND_Y = -0.22;
+
 function buildGround(scene) {
   const lawn = plane(200, 200, P.grass);
-  lawn.position.set(0, 0, 25);
+  lawn.position.set(0, GROUND_Y, 25);
   scene.add(lawn);
 
   const forecourt = plane(40, 20, P.gravel);
-  forecourt.position.set(12, 0.01, -20);
+  forecourt.position.set(12, GROUND_Y + 0.01, -20);
   scene.add(forecourt);
 
   function boundaryWall(w, h, d, x, z) {
     const m = box(w, h, d, P.stone);
-    m.position.set(x, h/2, z);
+    m.position.set(x, GROUND_Y + h/2, z);
     scene.add(m);
   }
   boundaryWall(200, 0.8, 0.3, 0, -29);
@@ -182,6 +187,18 @@ function buildSouthFacade(scene, fh, wt) {
     pan.position.set(x, fh/2, -11);
     scene.add(pan);
   });
+  // Entrance steps — 3 wide stone steps bridging lawn level (GROUND_Y ≈ -0.22) to floor (y=0)
+  // Each step is ~7cm tall; steps project forward (south) from the facade
+  const stepRise = 0.075;
+  const stepRun  = 0.38;
+  const stepW    = 5.5;
+  for (let i = 0; i < 3; i++) {
+    const stepH = stepRise * (i + 1);
+    const st = box(stepW, stepH, stepRun, P.stone);
+    st.position.set(0, GROUND_Y + stepH / 2, -11 - stepRun * (3 - i) + stepRun / 2);
+    scene.add(st);
+  }
+
   // Olive trees flanking door
   [[-3, -10.5], [3, -10.5]].forEach(([x, z]) => {
     const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 1.8, 7), stdMat(0x8a7a60));
@@ -626,12 +643,41 @@ function buildFirstFloor(scene) {
   const GFH = 3.4, FFH = 3.0;
   const FY = GFH + 0.3;
 
-  // Floor slab (not over double-height living room)
-  const slab1 = box(28, 0.3, 22, P.concreteDk);
-  slab1.position.set(4, FY - 0.15, 0);
-  scene.add(slab1);
-  const ffFloor = plane(28, 22, P.floorWood);
-  ffFloor.position.set(4, FY + 0.01, 0);
+  // First floor slab — split into 4 pieces to leave a stairwell opening.
+  // Staircase runs x:0.5–4.5, z:-9 to -1 (opening matches stair footprint + margin).
+  // Full slab would be box(28,0.3,22) centred at (4, FY-0.15, 0)
+  //   → x: -10 to 18,  z: -11 to 11
+  const SY = FY - 0.15;
+  const slabPieces = [
+    // West of stairwell (x: -10 → 0.5, full z)
+    [10.5, 22, -4.75, 0],
+    // East of stairwell (x: 4.5 → 18, full z)
+    [13.5, 22, 11.25, 0],
+    // South bridge above stairwell (x: 0.5 → 4.5, z: -11 → -9)
+    [4,    2,  2.5,   -10],
+    // North of stairwell opening (x: 0.5 → 4.5, z: -1 → 11)
+    [4,    12, 2.5,   5],
+  ];
+  slabPieces.forEach(([sw, sd, cx, cz]) => {
+    const s = box(sw, 0.3, sd, P.concreteDk);
+    s.position.set(cx, SY, cz);
+    scene.add(s);
+  });
+
+  // Matching timber floor overlay — same 4-piece split
+  const ffFloorPieces = [
+    [10.5, 22, -4.75, 0],
+    [13.5, 22, 11.25, 0],
+    [4,    2,  2.5,   -10],
+    [4,    12, 2.5,   5],
+  ];
+  ffFloorPieces.forEach(([fw, fd, cx, cz]) => {
+    const f = plane(fw, fd, P.floorWood);
+    f.position.set(cx, FY + 0.01, cz);
+    scene.add(f);
+  });
+  // (removed single ffFloor plane — replaced above)
+  const ffFloor = { position: { set: () => {} } }; // dummy to avoid reference errors below
   scene.add(ffFloor);
 
   // Gallery balustrade overlooking living room
