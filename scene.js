@@ -36,18 +36,42 @@ const P = {
   soil:        0x5a4030,
 };
 
+// Materials are memoized — hundreds of meshes share a handful of materials
+// instead of each allocating its own.
+const _matCache = new Map();
 function stdMat(color, opts = {}) {
-  return new THREE.MeshStandardMaterial({ color, roughness: 0.8, metalness: 0.0, ...opts });
+  let key = color;
+  for (const k in opts) {
+    const v = opts[k];
+    key += '|' + k + ':' + (v && v.isTexture ? v.uuid : v);
+  }
+  let m = _matCache.get(key);
+  if (!m) {
+    m = new THREE.MeshStandardMaterial({ color, roughness: 0.8, metalness: 0.0, ...opts });
+    _matCache.set(key, m);
+  }
+  return m;
 }
+
+// All boxes/planes share one unit geometry, sized via mesh.scale —
+// normals, raycasts and bounding boxes all handle non-uniform scale.
+const _unitBox = new THREE.BoxGeometry(1, 1, 1);
+const _unitPlane = new THREE.PlaneGeometry(1, 1);
+const _dummy = new THREE.Object3D();
+const _color = new THREE.Color();
+
 function box(w, h, d, color, opts = {}) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), stdMat(color, opts));
+  const m = new THREE.Mesh(_unitBox, stdMat(color, opts));
+  m.scale.set(w, h, d);
   m.castShadow = true; m.receiveShadow = true;
   return m;
 }
 function plane(w, d, color, opts = {}) {
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), stdMat(color, opts));
+  const m = new THREE.Mesh(_unitPlane, stdMat(color, opts));
+  m.scale.set(w, d, 1);
   m.rotation.x = -Math.PI / 2;
   m.receiveShadow = true;
+  m.userData.noShadow = true; // horizontal surfaces never need to cast
   return m;
 }
 
@@ -246,6 +270,7 @@ function buildEastFacade(scene, fh, wt) {
   for (let y = 0.3; y < fh - 0.3; y += 0.35) {
     const strip = box(0.05, 0.05, 21, P.timber);
     strip.position.set(20.1, y, 0);
+    strip.userData.noShadow = true;
     scene.add(strip);
   }
 }
@@ -265,6 +290,7 @@ function buildEntryHall(scene, fh) {
     const hook = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.18, 6), stdMat(P.steel));
     hook.position.set(-4 + dx, 1.82, -10.45);
     hook.rotation.x = 0.4;
+    hook.userData.noShadow = true;
     scene.add(hook);
   });
   // Console table
@@ -284,6 +310,7 @@ function buildLivingRoom(scene, fh) {
   for (let y = 0.3; y < fh - 0.2; y += 0.4) {
     const g = box(0.05, 0.05, 20, P.timberDk);
     g.position.set(-19.75, y, 0);
+    g.userData.noShadow = true;
     scene.add(g);
   }
   // Area rug
@@ -343,17 +370,26 @@ function buildLivingRoom(scene, fh) {
   const bsf = box(2, fh * 0.85, 0.3, P.offWhite);
   bsf.position.set(-19.5, fh * 0.425, -6);
   scene.add(bsf);
-  [0.6, 1.4, 2.2].forEach(y => {
+  const lrBookColors = [0x8b4040, 0x406a8b, 0x5a8b40, 0x8b7040, 0x705a8b];
+  const lrShelves = [0.6, 1.4, 2.2];
+  const lrBooks = new THREE.InstancedMesh(_unitBox, stdMat(0xffffff), lrShelves.length * lrBookColors.length);
+  let lrBi = 0;
+  lrShelves.forEach(y => {
     const plank = box(1.9, 0.03, 0.28, P.timberDk);
     plank.position.set(-19.5, y, -6);
     scene.add(plank);
-    const bookColors = [0x8b4040, 0x406a8b, 0x5a8b40, 0x8b7040, 0x705a8b];
-    bookColors.forEach((c, i) => {
-      const bkm = box(0.12, 0.28, 0.25, c);
-      bkm.position.set(-20.3 + i * 0.15, y + 0.15, -6);
-      scene.add(bkm);
+    lrBookColors.forEach((c, i) => {
+      _dummy.position.set(-20.3 + i * 0.15, y + 0.15, -6);
+      _dummy.scale.set(0.12, 0.28, 0.25);
+      _dummy.updateMatrix();
+      lrBooks.setMatrixAt(lrBi, _dummy.matrix);
+      lrBooks.setColorAt(lrBi, _color.setHex(c));
+      lrBi++;
     });
   });
+  lrBooks.userData.collide = 'none';
+  lrBooks.userData.noShadow = true;
+  scene.add(lrBooks);
   // Large abstract artwork
   const art = box(1.8, 1.1, 0.04, 0x2a3a4a);
   art.position.set(-19.7, 2.0, 2);
@@ -402,6 +438,7 @@ function buildKitchen(scene, fh) {
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.015, 4, 16), stdMat(0x303030));
     ring.rotation.x = Math.PI/2;
     ring.position.set(9.5+dx, 0.94, -1+dz);
+    ring.userData.noShadow = true;
     scene.add(ring);
   });
   // Extractor hood
@@ -519,17 +556,26 @@ function buildStudy(scene, fh) {
   const bsf = box(0.25, fh * 0.9, 5, P.offWhite);
   bsf.position.set(19.8, fh * 0.45, 7);
   scene.add(bsf);
-  [0.5, 1.2, 1.9, 2.6].forEach(y => {
+  const stBookColors = [0x7a3a3a, 0x3a527a, 0x7a6030, 0x3a7a4a, 0x5a3a7a, 0x7a5a3a, 0x3a7a7a];
+  const stShelves = [0.5, 1.2, 1.9, 2.6];
+  const stBooks = new THREE.InstancedMesh(_unitBox, stdMat(0xffffff), stShelves.length * stBookColors.length);
+  let stBi = 0;
+  stShelves.forEach(y => {
     const plk = box(0.22, 0.03, 4.8, P.timber);
     plk.position.set(19.8, y, 7);
     scene.add(plk);
-    const bookColors = [0x7a3a3a, 0x3a527a, 0x7a6030, 0x3a7a4a, 0x5a3a7a, 0x7a5a3a, 0x3a7a7a];
-    bookColors.forEach((c, i) => {
-      const bkm = box(0.12, 0.22, 0.21, c);
-      bkm.position.set(17.6 + i * 0.14, y + 0.13, 7);
-      scene.add(bkm);
+    stBookColors.forEach((c, i) => {
+      _dummy.position.set(17.6 + i * 0.14, y + 0.13, 7);
+      _dummy.scale.set(0.12, 0.22, 0.21);
+      _dummy.updateMatrix();
+      stBooks.setMatrixAt(stBi, _dummy.matrix);
+      stBooks.setColorAt(stBi, _color.setHex(c));
+      stBi++;
     });
   });
+  stBooks.userData.collide = 'none';
+  stBooks.userData.noShadow = true;
+  scene.add(stBooks);
 }
 
 function buildUtility(scene, fh) {
@@ -614,6 +660,7 @@ function buildGarage(scene) {
     [0.5, 1.0, 1.5, 2.0].forEach(y => {
       const rib = box(5.5, 0.04, 0.04, P.steelDk);
       rib.position.set(26 + dx, y, -4.96);
+      rib.userData.noShadow = true;
       scene.add(rib);
     });
   });
@@ -958,6 +1005,7 @@ function buildGarden(scene) {
     const patch = new THREE.Mesh(new THREE.CircleGeometry(1.4, 8), stdMat(0xc88040));
     patch.rotation.x = -Math.PI/2;
     patch.position.set(x, 0.03, z);
+    patch.userData.noShadow = true;
     scene.add(patch);
   });
   // Retaining wall
@@ -1012,25 +1060,35 @@ function buildKitchenGarden(scene) {
     wall.position.set(x, h/2, z);
     scene.add(wall);
   });
-  // Raised beds
-  [[-2,-3],[2,-3],[-2,2],[2,2]].forEach(([dx,dz]) => {
+  // Raised beds — all 120 plants in a single InstancedMesh (unit-height
+  // cylinder, randomized per-instance Y scale)
+  const beds = [[-2,-3],[2,-3],[-2,2],[2,2]];
+  const ROWS = 5, COLS = 6;
+  const plants = new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(0.05, 0.06, 1, 5),
+    stdMat(0x4a8a30),
+    beds.length * ROWS * COLS
+  );
+  let pi = 0;
+  beds.forEach(([dx,dz]) => {
     const bed = box(2.8, 0.35, 2.2, P.stoneDk);
     bed.position.set(kgx+dx, 0.175, kgz+dz);
     scene.add(bed);
     const soil = plane(2.6, 2.0, P.soil);
     soil.position.set(kgx+dx, 0.36, kgz+dz);
     scene.add(soil);
-    for (let r = -0.7; r <= 0.7; r += 0.35) {
-      for (let c = -0.8; c <= 0.8; c += 0.3) {
-        const plant = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.05, 0.06, 0.18 + Math.random()*0.12, 5),
-          stdMat(0x4a8a30)
-        );
-        plant.position.set(kgx+dx+c, 0.48, kgz+dz+r);
-        scene.add(plant);
+    for (let ri = 0; ri < ROWS; ri++) {
+      for (let ci = 0; ci < COLS; ci++) {
+        _dummy.position.set(kgx+dx-0.8+ci*0.3, 0.48, kgz+dz-0.7+ri*0.35);
+        _dummy.scale.set(1, 0.18 + Math.random()*0.12, 1);
+        _dummy.updateMatrix();
+        plants.setMatrixAt(pi++, _dummy.matrix);
       }
     }
   });
+  plants.userData.collide = 'none';
+  plants.userData.noShadow = true;
+  scene.add(plants);
   const kgPath = plane(1.0, 16, P.gravel);
   kgPath.position.set(kgx, 0.02, kgz);
   scene.add(kgPath);
@@ -1055,6 +1113,7 @@ function buildDriveway(scene) {
   [-25, -22, -19].forEach(z => {
     const bollard = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.6, 8), stdMat(P.steelDk));
     bollard.position.set(22, 0.3, z);
+    bollard.userData.noShadow = true;
     scene.add(bollard);
     const bl = new THREE.PointLight(0xffee88, 0.4, 4);
     bl.position.set(22, 0.65, z);
@@ -1071,25 +1130,33 @@ function buildTrees(scene) {
     [12, -16, 0.5], [12, -20, 0.5], [12, -24, 0.5], // avenue
     [-25, 15, 0.75], [-28, 5, 0.7],
   ];
+  // Two draw calls for all trees: instanced trunks + instanced canopies.
+  // Trunks are tagged 'wall' — raycasting against InstancedMesh respects
+  // instance matrices, so each trunk still blocks movement individually.
+  const trunks = new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(0.18, 0.22, 1, 8), stdMat(P.timberDk), treeData.length
+  );
+  const canopies = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(1, 7, 5), stdMat(P.grass), treeData.length * 3
+  );
+  let ti = 0, ci = 0;
   treeData.forEach(([x, z, scale]) => {
     const trunkH = 3.5 * scale;
-    const trunk = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.18 * scale, 0.22 * scale, trunkH, 8),
-      stdMat(P.timberDk)
-    );
-    trunk.position.set(x, trunkH/2, z);
-    trunk.castShadow = true;
-    scene.add(trunk);
+    _dummy.position.set(x, trunkH/2, z);
+    _dummy.scale.set(scale, trunkH, scale);
+    _dummy.updateMatrix();
+    trunks.setMatrixAt(ti++, _dummy.matrix);
     [[0, trunkH + 1.2*scale, 0, 2.0*scale],
      [-0.6*scale, trunkH + 0.7*scale, 0.4*scale, 1.4*scale],
      [0.5*scale, trunkH + 0.9*scale, -0.3*scale, 1.5*scale]].forEach(([dx,dy,dz,r]) => {
-      const canopy = new THREE.Mesh(
-        new THREE.SphereGeometry(r, 7, 5),
-        stdMat(P.grass)
-      );
-      canopy.position.set(x+dx, dy, z+dz);
-      canopy.castShadow = true;
-      scene.add(canopy);
+      _dummy.position.set(x+dx, dy, z+dz);
+      _dummy.scale.set(r, r, r);
+      _dummy.updateMatrix();
+      canopies.setMatrixAt(ci++, _dummy.matrix);
     });
   });
+  trunks.userData.collide = 'wall';
+  canopies.userData.collide = 'none';
+  scene.add(trunks);
+  scene.add(canopies);
 }
