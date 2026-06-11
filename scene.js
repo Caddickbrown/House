@@ -574,9 +574,10 @@ function buildStaircase(scene, fh) {
     step.position.set(2.5, i * stepH + stepH/2, -8.0 + i * stepD);
     scene.add(step);
   }
-  // Glass balustrade
+  // Glass balustrade — must block despite being glass
   const bal = box(0.04, 0.9, stepCount * stepD + 0.2, P.glass, { transparent: true, opacity: 0.3 });
   bal.position.set(1.8, fh * 0.5, -8.0 + stepCount * stepD / 2);
+  bal.userData.collide = 'wall';
   scene.add(bal);
   const rail = box(0.04, 0.04, stepCount * stepD + 0.3, P.steelDk);
   rail.position.set(1.8, fh * 0.9, -8.0 + stepCount * stepD / 2);
@@ -676,13 +677,10 @@ function buildFirstFloor(scene) {
     f.position.set(cx, FY + 0.01, cz);
     scene.add(f);
   });
-  // (removed single ffFloor plane — replaced above)
-  const ffFloor = { position: { set: () => {} } }; // dummy to avoid reference errors below
-  scene.add(ffFloor);
-
-  // Gallery balustrade overlooking living room
+  // Gallery balustrade overlooking living room — must block despite being glass
   const bal = box(0.04, 0.9, 6, P.glass, { transparent: true, opacity: 0.35 });
   bal.position.set(-2, FY + 0.45, 0);
+  bal.userData.collide = 'wall';
   scene.add(bal);
   const rail = box(0.04, 0.04, 6.1, P.steelDk);
   rail.position.set(-2, FY + 0.9, 0);
@@ -914,8 +912,11 @@ function buildPool(scene) {
   const poolSurround = plane(18, 7, P.stone);
   poolSurround.position.set(5, 0.01, 30);
   scene.add(poolSurround);
+  // Walkable on purpose: with 0.55m step-up the player could never climb out
+  // of the 1.4m-deep pool, so the surface is treated as floor.
   const poolWater = plane(13.8, 3.4, P.water);
   poolWater.position.set(5, -0.08, 30);
+  poolWater.userData.collide = 'floor';
   scene.add(poolWater);
   // Perimeter lip
   [[5, 30+1.75, 14.3, 0.12, 0.12], [5, 30-1.75, 14.3, 0.12, 0.12]].forEach(([x,z,w,h,d]) => {

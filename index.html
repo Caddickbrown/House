@@ -116,7 +116,6 @@
   import { EffectComposer } from 'https://unpkg.com/three@0.158.0/examples/jsm/postprocessing/EffectComposer.js';
   import { RenderPass } from 'https://unpkg.com/three@0.158.0/examples/jsm/postprocessing/RenderPass.js';
   import { UnrealBloomPass } from 'https://unpkg.com/three@0.158.0/examples/jsm/postprocessing/UnrealBloomPass.js';
-  import { BokehPass } from 'https://unpkg.com/three@0.158.0/examples/jsm/postprocessing/BokehPass.js';
   import { Sky } from 'https://unpkg.com/three@0.158.0/examples/jsm/objects/Sky.js';
 
   // ── Renderer ────────────────────────────────────────────────────────────────
@@ -182,7 +181,13 @@
     buildHouse(scene);
     getRoomLabel = grl;
     scene.traverse(obj => {
-      if (obj.isMesh) { obj.castShadow = true; obj.receiveShadow = true; }
+      if (!obj.isMesh || obj === sky) return;
+      const mat = obj.material;
+      // Transparent surfaces would cast fully opaque shadows (shadow maps
+      // ignore opacity), so glass must not cast.
+      const translucent = mat && mat.transparent && (mat.opacity ?? 1) < 0.7;
+      obj.castShadow = !translucent && !obj.userData.noShadow;
+      obj.receiveShadow = true;
     });
     buildCollisionLists();
   });
@@ -207,7 +212,18 @@
 
   function buildCollisionLists() {
     scene.traverse(obj => {
-      if (!obj.isMesh) return;
+      if (!obj.isMesh || obj === sky) return;
+
+      // Explicit tag wins over heuristics ('wall' | 'floor' | 'none')
+      const tag = obj.userData.collide;
+      if (tag === 'wall')  { wallMeshes.push(obj);  return; }
+      if (tag === 'floor') { floorMeshes.push(obj); return; }
+      if (tag === 'none') return;
+
+      // InstancedMesh bounding boxes ignore instance matrices, so the size
+      // heuristics below would misclassify them — tag-only.
+      if (obj.isInstancedMesh) return;
+
       const mat = obj.material;
       // Skip transparent/glass and emissive-only items
       if (mat && mat.transparent && (mat.opacity || 1) < 0.7) return;
@@ -228,9 +244,12 @@
     });
   }
 
+  const _DOWN = new THREE.Vector3(0, -1, 0);
+  const _rayOrigin = new THREE.Vector3();
+
   function sampleFloor(x, z, fromY) {
     // Cast downward from slightly above the player feet
-    _floorRay.set(new THREE.Vector3(x, fromY + 0.3, z), new THREE.Vector3(0, -1, 0));
+    _floorRay.set(_rayOrigin.set(x, fromY + 0.3, z), _DOWN);
     const hits = _floorRay.intersectObjects(floorMeshes, false);
     for (const h of hits) {
       if (h.distance > 0.05) return h.point.y; // first valid hit
@@ -248,16 +267,17 @@ function resolveMovement(cx, cz, footY, dx, dz) {
     return { x: cx, z: cz };
   }
 
+  const _CARDINALS = [
+    new THREE.Vector3(1,0,0), new THREE.Vector3(-1,0,0),
+    new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,-1)
+  ];
+
   function isBlocked(tx, tz, footY) {
     // Cast rays outward in 4 cardinal directions from target position
     // at two heights (knee and chest) to catch walls reliably
-    const checkHeights = [footY + 0.4, footY + 1.1];
-    for (const y of checkHeights) {
-      for (const dir of [
-        new THREE.Vector3(1,0,0), new THREE.Vector3(-1,0,0),
-        new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,-1)
-      ]) {
-        _wallRay.set(new THREE.Vector3(tx, y, tz), dir);
+    for (const dy of [0.4, 1.1]) {
+      for (const dir of _CARDINALS) {
+        _wallRay.set(_rayOrigin.set(tx, footY + dy, tz), dir);
         _wallRay.far = PLAYER_R;
         const hits = _wallRay.intersectObjects(wallMeshes, false);
         if (hits.length > 0 && hits[0].distance < PLAYER_R) return true;
@@ -276,12 +296,17 @@ function resolveMovement(cx, cz, footY, dx, dz) {
 
   document.addEventListener('keydown', e => keys[e.code] = true);
   document.addEventListener('keyup',   e => keys[e.code] = false);
+  // Keys "stick" if held across a focus change (e.g. Esc out of pointer lock)
+  // because the keyup never reaches us — clear them all.
+  function clearKeys() { for (const k in keys) keys[k] = false; }
+  window.addEventListener('blur', clearKeys);
 
   overlay.addEventListener('click', () => renderer.domElement.requestPointerLock());
 
   document.addEventListener('pointerlockchange', () => {
     locked = document.pointerLockElement === renderer.domElement;
     overlay.classList.toggle('hidden', locked);
+    if (!locked) clearKeys();
   });
 
   document.addEventListener('mousemove', e => {
@@ -293,6 +318,9 @@ function resolveMovement(cx, cz, footY, dx, dz) {
 
   // ── Animate ─────────────────────────────────────────────────────────────────
   const clock = new THREE.Clock();
+  const roomLabelEl = document.getElementById('room-label');
+  const _move = new THREE.Vector3();
+  const _moveEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 
   function animate() {
     requestAnimationFrame(animate);
@@ -300,13 +328,14 @@ function resolveMovement(cx, cz, footY, dx, dz) {
 
     if (locked) {
       const speed = keys['ShiftLeft'] || keys['ShiftRight'] ? SPRINT : SPEED;
-      const move = new THREE.Vector3();
+      const move = _move.set(0, 0, 0);
       if (keys['KeyW'] || keys['ArrowUp'])    move.z -= 1;
       if (keys['KeyS'] || keys['ArrowDown'])  move.z += 1;
       if (keys['KeyA'] || keys['ArrowLeft'])  move.x -= 1;
       if (keys['KeyD'] || keys['ArrowRight']) move.x += 1;
       move.normalize().multiplyScalar(speed * delta);
-      move.applyEuler(new THREE.Euler(0, yaw, 0));
+      _moveEuler.set(0, yaw, 0);
+      move.applyEuler(_moveEuler);
 
       const cx = camera.position.x;
       const cz = camera.position.z;
@@ -352,9 +381,7 @@ function resolveMovement(cx, cz, footY, dx, dz) {
 
     // Room label HUD
     if (getRoomLabel) {
-      const label = getRoomLabel(camera.position.x, camera.position.z, camera.position.y);
-      const el = document.getElementById('room-label');
-      if (el) el.textContent = label;
+      roomLabelEl.textContent = getRoomLabel(camera.position.x, camera.position.z, camera.position.y);
     }
 
     composer.render();
