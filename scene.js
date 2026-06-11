@@ -171,10 +171,10 @@ const TEX = {
 };
 
 // ─── Animation hook ──────────────────────────────────────────────────────────
-// The viewer calls tickScene(elapsedSeconds) every frame.
+// The viewer calls tickScene(elapsedSeconds, deltaSeconds) every frame.
 const _animators = [];
-export function tickScene(t) {
-  for (const fn of _animators) fn(t);
+export function tickScene(t, dt) {
+  for (const fn of _animators) fn(t, dt);
 }
 
 // ─── Interactables ───────────────────────────────────────────────────────────
@@ -304,20 +304,43 @@ function buildSouthFacade(scene, fh, wt) {
   cladTop.position.set(0, fh - 0.9, -10.9);
   scene.add(cladTop);
 
-  // Large glass panes
+  // Large glass panes — fixed glazing, so they block (the openable front
+  // door is the way in; the north facade sliders stay passable)
   [-8, 8].forEach(x => {
     const gl = box(6, fh - 0.5, 0.08, P.glass, { transparent: true, opacity: 0.4, roughness: 0.05, metalness: 0.3 });
     gl.position.set(x, fh/2 - 0.25, -10.95);
+    gl.userData.collide = 'wall';
     scene.add(gl);
   });
-  // Front door
+  // Sidelights between the door and the big panes (was an invisible gap)
+  [-2.8, 2.8].forEach(x => {
+    const gl = box(4.4, fh - 0.5, 0.08, P.glass, { transparent: true, opacity: 0.4, roughness: 0.05, metalness: 0.3 });
+    gl.position.set(x, fh/2 - 0.25, -10.95);
+    gl.userData.collide = 'wall';
+    scene.add(gl);
+  });
+  // Front door — hinged on a group so [E] swings it open/closed.
+  // Collision follows automatically: the door mesh is a tagged wall and
+  // raycasts respect its animated world matrix.
+  const doorGroup = new THREE.Group();
+  doorGroup.position.set(-0.55, 0, -10.93);
   const door = box(1.1, 2.4, 0.06, P.steelDk);
-  door.position.set(0, 1.2, -10.93);
-  inspectable(door, 'Front Door', 'Blackened steel, pivot-hung. It weighs more than it looks, and it looks heavy.');
-  scene.add(door);
+  door.position.set(0.55, 1.2, 0);
+  door.userData.collide = 'wall';
+  doorGroup.add(door);
   const handle = box(0.05, 0.35, 0.06, 0xc8a838);
-  handle.position.set(0.45, 1.1, -10.9);
-  scene.add(handle);
+  handle.position.set(1.0, 1.1, 0.05);
+  handle.userData.collide = 'none';
+  handle.userData.noShadow = true;
+  doorGroup.add(handle);
+  scene.add(doorGroup);
+  const doorState = { open: false };
+  inspectable(door, 'Front Door', 'Blackened steel, pivot-hung. It weighs more than it looks, and it looks heavy.');
+  door.userData.inspect.action = () => { doorState.open = !doorState.open; };
+  _animators.push((t, dt) => {
+    const target = doorState.open ? -1.85 : 0; // swings inward, away from the steps
+    doorGroup.rotation.y += (target - doorGroup.rotation.y) * Math.min(1, 6 * (dt || 0.016));
+  });
   // Flanking panels
   [-14, 14].forEach(x => {
     const pan = box(6, fh, wt, P.concrete);

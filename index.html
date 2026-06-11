@@ -429,7 +429,10 @@ function resolveMovement(cx, cz, footY, dx, dz) {
   const overlay = document.getElementById('overlay');
   const keys = {};
   let locked = false;
-  let yaw = 0, pitch = 0;
+  let yaw = Math.PI, pitch = 0; // spawn on the forecourt facing the front door (+z)
+
+  // Debug/automation handle (used by the headless smoke test)
+  window.__house = { camera, setView: (y, p = 0) => { yaw = y; pitch = p; } };
   const SPEED  = 5.0;
   const SPRINT = 11.0;
 
@@ -502,7 +505,8 @@ function resolveMovement(cx, cz, footY, dx, dz) {
     } else if (e.code === 'KeyE') {
       if (infoOpen) { hideInfo(); return; }
       if (lookTarget) {
-        const { name, text } = lookTarget.userData.inspect;
+        const { name, text, action } = lookTarget.userData.inspect;
+        if (action) { action(); return; } // doors etc. act instead of narrating
         infoTitleEl.textContent = name;
         infoTextEl.textContent = text;
         infoCardEl.classList.add('visible');
@@ -525,7 +529,7 @@ function resolveMovement(cx, cz, footY, dx, dz) {
     elapsed += delta;
 
     tickAtmosphere(delta);
-    if (tickScene) tickScene(elapsed);
+    if (tickScene) tickScene(elapsed, delta);
 
     if (locked) {
       const speed = keys['ShiftLeft'] || keys['ShiftRight'] ? SPRINT : SPEED;
