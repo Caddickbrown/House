@@ -89,6 +89,16 @@
       transition: opacity 0.5s;
     }
 
+    #time-label {
+      position: fixed;
+      top: 32px; right: 32px;
+      color: rgba(255,255,255,0.4);
+      font-size: 12px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      pointer-events: none;
+    }
+
     #vignette {
       position: fixed; inset: 0;
       background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.55) 100%);
@@ -128,6 +138,7 @@
 <div id="crosshair"></div>
 <div id="vignette"></div>
 <div id="room-label"></div>
+<div id="time-label">Noon</div>
 <div id="interact-hint">[ E ] Inspect</div>
 <div id="info-card"><h2></h2><p></p></div>
 <div id="hud">WASD · Mouse · E to interact</div>
@@ -169,32 +180,26 @@
   // ── Post-processing ─────────────────────────────────────────────────────────
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  composer.addPass(new UnrealBloomPass(
+  const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
     0.18, 0.4, 0.88
-  ));
+  );
+  composer.addPass(bloomPass);
 
   // ── Sky ─────────────────────────────────────────────────────────────────────
   const sky = new Sky();
   sky.scale.setScalar(450000);
   scene.add(sky);
   const skyUni = sky.material.uniforms;
-  skyUni['turbidity'].value    = 5;
-  skyUni['rayleigh'].value     = 1.8;
-  skyUni['mieCoefficient'].value    = 0.005;
-  skyUni['mieDirectionalG'].value   = 0.8;
+  skyUni['mieCoefficient'].value  = 0.005;
+  skyUni['mieDirectionalG'].value = 0.8;
   const sunVec = new THREE.Vector3();
-  const phi = THREE.MathUtils.degToRad(90 - 35);
-  const theta = THREE.MathUtils.degToRad(200);
-  sunVec.setFromSphericalCoords(1, phi, theta);
-  skyUni['sunPosition'].value.copy(sunVec);
 
   // ── Lighting ────────────────────────────────────────────────────────────────
   const hemi = new THREE.HemisphereLight(0xfff4e0, 0x8ab4a0, 0.6);
   scene.add(hemi);
 
   const sun = new THREE.DirectionalLight(0xfff8e7, 2.5);
-  sun.position.copy(sunVec).multiplyScalar(100);
   sun.castShadow = true;
   sun.shadow.mapSize.set(4096, 4096);
   sun.shadow.camera.near = 1;
@@ -204,14 +209,88 @@
   sun.shadow.bias = -0.001;
   scene.add(sun);
 
+  // ── Time of day (N to cycle) ────────────────────────────────────────────────
+  const TIMES = [
+    { name: 'Morning', elev: 16, azim: 120, sunI: 1.7, sunC: new THREE.Color(0xffdcb0),
+      hemiI: 0.5,  fogC: new THREE.Color(0xdbe4ee), fogD: 0.0055, exp: 0.85, bloom: 0.22,
+      lights: 0.8, turb: 7, rayl: 2.6 },
+    { name: 'Noon',    elev: 35, azim: 200, sunI: 2.5, sunC: new THREE.Color(0xfff8e7),
+      hemiI: 0.6,  fogC: new THREE.Color(0xc8d8e8), fogD: 0.004,  exp: 0.9,  bloom: 0.18,
+      lights: 0.3, turb: 5, rayl: 1.8 },
+    { name: 'Dusk',    elev: 5,  azim: 285, sunI: 1.1, sunC: new THREE.Color(0xff9248),
+      hemiI: 0.3,  fogC: new THREE.Color(0xe0b090), fogD: 0.006,  exp: 0.82, bloom: 0.32,
+      lights: 2.2, turb: 8, rayl: 3.5 },
+    { name: 'Night',   elev: -10, azim: 320, sunI: 0.0, sunC: new THREE.Color(0x90a8d0),
+      hemiI: 0.07, fogC: new THREE.Color(0x101822), fogD: 0.0065, exp: 0.75, bloom: 0.5,
+      lights: 2.6, turb: 4, rayl: 0.6 },
+  ];
+  let timeIndex = 1; // start at noon
+  // Current atmosphere state, eased toward TIMES[timeIndex] every frame
+  const atmo = { ...TIMES[1], sunC: TIMES[1].sunC.clone(), fogC: TIMES[1].fogC.clone() };
+  const interiorLights = []; // PointLights collected after the house builds
+  const timeLabelEl = document.getElementById('time-label');
+
+  function applyAtmosphere() {
+    sunVec.setFromSphericalCoords(1,
+      THREE.MathUtils.degToRad(90 - atmo.elev),
+      THREE.MathUtils.degToRad(atmo.azim));
+    skyUni['sunPosition'].value.copy(sunVec);
+    skyUni['turbidity'].value = atmo.turb;
+    skyUni['rayleigh'].value  = atmo.rayl;
+    sun.position.copy(sunVec).multiplyScalar(100);
+    sun.intensity = atmo.sunI;
+    sun.color.copy(atmo.sunC);
+    hemi.intensity = atmo.hemiI;
+    scene.fog.color.copy(atmo.fogC);
+    scene.fog.density = atmo.fogD;
+    renderer.toneMappingExposure = atmo.exp;
+    bloomPass.strength = atmo.bloom;
+    for (const pl of interiorLights) pl.intensity = pl.userData.baseIntensity * atmo.lights;
+  }
+  applyAtmosphere();
+
+  function tickAtmosphere(delta) {
+    const tgt = TIMES[timeIndex];
+    const k = 1 - Math.exp(-2.2 * delta); // frame-rate independent easing
+    const lerp = THREE.MathUtils.lerp;
+    atmo.elev  = lerp(atmo.elev,  tgt.elev,  k);
+    atmo.azim  = lerp(atmo.azim,  tgt.azim,  k);
+    atmo.sunI  = lerp(atmo.sunI,  tgt.sunI,  k);
+    atmo.hemiI = lerp(atmo.hemiI, tgt.hemiI, k);
+    atmo.fogD  = lerp(atmo.fogD,  tgt.fogD,  k);
+    atmo.exp   = lerp(atmo.exp,   tgt.exp,   k);
+    atmo.bloom = lerp(atmo.bloom, tgt.bloom, k);
+    atmo.lights = lerp(atmo.lights, tgt.lights, k);
+    atmo.turb  = lerp(atmo.turb,  tgt.turb,  k);
+    atmo.rayl  = lerp(atmo.rayl,  tgt.rayl,  k);
+    atmo.sunC.lerp(tgt.sunC, k);
+    atmo.fogC.lerp(tgt.fogC, k);
+    applyAtmosphere();
+  }
+
+  function setTimeOfDay(i) {
+    timeIndex = i;
+    // Shadows from a below-horizon sun are wrong — switch to point lights only
+    sun.castShadow = TIMES[i].elev > 0 && shadowsEnabled;
+    if (timeLabelEl) timeLabelEl.textContent = TIMES[i].name;
+  }
+  let shadowsEnabled = true;
+
   // ── Placeholder house (to be replaced by scene.js) ──────────────────────────
   let getRoomLabel = null;
   let interactables = [];
-  import('./scene.js').then(({ buildHouse, getRoomLabel: grl, INTERACTABLES }) => {
+  let tickScene = null;
+  import('./scene.js').then(({ buildHouse, getRoomLabel: grl, INTERACTABLES, tickScene: tick }) => {
     buildHouse(scene);
     getRoomLabel = grl;
     interactables = INTERACTABLES;
+    tickScene = tick;
     scene.traverse(obj => {
+      if (obj.isPointLight) {
+        obj.userData.baseIntensity = obj.intensity;
+        interiorLights.push(obj);
+        return;
+      }
       if (!obj.isMesh || obj === sky) return;
       const mat = obj.material;
       // Transparent surfaces would cast fully opaque shadows (shadow maps
@@ -379,14 +458,18 @@ function resolveMovement(cx, cz, footY, dx, dz) {
   }
 
   document.addEventListener('keydown', e => {
-    if (e.code !== 'KeyE' || !locked) return;
-    if (infoOpen) { hideInfo(); return; }
-    if (lookTarget) {
-      const { name, text } = lookTarget.userData.inspect;
-      infoTitleEl.textContent = name;
-      infoTextEl.textContent = text;
-      infoCardEl.classList.add('visible');
-      infoOpen = true;
+    if (!locked) return;
+    if (e.code === 'KeyN') {
+      setTimeOfDay((timeIndex + 1) % TIMES.length);
+    } else if (e.code === 'KeyE') {
+      if (infoOpen) { hideInfo(); return; }
+      if (lookTarget) {
+        const { name, text } = lookTarget.userData.inspect;
+        infoTitleEl.textContent = name;
+        infoTextEl.textContent = text;
+        infoCardEl.classList.add('visible');
+        infoOpen = true;
+      }
     }
   });
 
@@ -396,9 +479,15 @@ function resolveMovement(cx, cz, footY, dx, dz) {
   const _move = new THREE.Vector3();
   const _moveEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 
+  let elapsed = 0;
+
   function animate() {
     requestAnimationFrame(animate);
     const delta = Math.min(clock.getDelta(), 0.1);
+    elapsed += delta;
+
+    tickAtmosphere(delta);
+    if (tickScene) tickScene(elapsed);
 
     if (locked) {
       const speed = keys['ShiftLeft'] || keys['ShiftRight'] ? SPRINT : SPEED;

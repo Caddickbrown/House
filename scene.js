@@ -75,6 +75,108 @@ function plane(w, d, color, opts = {}) {
   return m;
 }
 
+// ─── Procedural textures ─────────────────────────────────────────────────────
+// Small canvases drawn once at load. They are kept near-white so the
+// material colour still dominates (maps multiply with material.color).
+function makeTexture(size, draw) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  draw(c.getContext('2d'), size);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+// Same image, different tiling — clones share the underlying canvas.
+function repTex(base, rx, ry) {
+  const t = base.clone();
+  t.repeat.set(rx, ry);
+  t.needsUpdate = true;
+  return t;
+}
+
+function speckleDraw(base, amp, count) {
+  return (ctx, s) => {
+    ctx.fillStyle = `rgb(${base},${base},${base})`;
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < count; i++) {
+      const v = base + (Math.random() - 0.5) * 2 * amp;
+      ctx.fillStyle = `rgb(${v|0},${v|0},${v|0})`;
+      const r = 1 + Math.random() * 2.5;
+      ctx.fillRect(Math.random() * s, Math.random() * s, r, r);
+    }
+  };
+}
+
+const TEX = {
+  grass: makeTexture(256, (ctx, s) => {
+    ctx.fillStyle = '#dcdcdc';
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 3500; i++) {
+      const v = 185 + Math.random() * 70;
+      ctx.strokeStyle = `rgb(${v|0},${v|0},${v|0})`;
+      const x = Math.random() * s, y = Math.random() * s;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + (Math.random() - 0.5) * 3, y - 2 - Math.random() * 3);
+      ctx.stroke();
+    }
+  }),
+  gravel: makeTexture(256, speckleDraw(215, 55, 5000)),
+  wood: makeTexture(256, (ctx, s) => {
+    ctx.fillStyle = '#e6e0d8';
+    ctx.fillRect(0, 0, s, s);
+    const plankW = s / 4;
+    for (let p = 0; p < 4; p++) {
+      // grain streaks
+      for (let i = 0; i < 40; i++) {
+        const v = 200 + Math.random() * 50;
+        ctx.strokeStyle = `rgba(${v|0},${(v*0.96)|0},${(v*0.9)|0},0.5)`;
+        const x = p * plankW + Math.random() * plankW;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.bezierCurveTo(x + 4, s * 0.3, x - 4, s * 0.7, x + 2, s);
+        ctx.stroke();
+      }
+      // plank joint
+      ctx.fillStyle = 'rgba(90,75,60,0.55)';
+      ctx.fillRect(p * plankW, 0, 2, s);
+    }
+  }),
+  marble: makeTexture(256, (ctx, s) => {
+    ctx.fillStyle = '#f2efec';
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 9; i++) {
+      const g = 175 + Math.random() * 50;
+      ctx.strokeStyle = `rgba(${g|0},${g|0},${(g+6)|0},0.55)`;
+      ctx.lineWidth = 0.6 + Math.random() * 1.4;
+      ctx.beginPath();
+      ctx.moveTo(Math.random() * s, 0);
+      ctx.bezierCurveTo(Math.random() * s, s * 0.33, Math.random() * s, s * 0.66, Math.random() * s, s);
+      ctx.stroke();
+    }
+  }),
+  paver: makeTexture(256, (ctx, s) => {
+    ctx.fillStyle = '#e2ded8';
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 2200; i++) {
+      const v = 195 + Math.random() * 50;
+      ctx.fillStyle = `rgb(${v|0},${v|0},${v|0})`;
+      ctx.fillRect(Math.random() * s, Math.random() * s, 2, 2);
+    }
+    ctx.fillStyle = 'rgba(70,64,58,0.7)';
+    ctx.fillRect(0, 0, 3, s);
+    ctx.fillRect(0, 0, s, 3);
+  }),
+};
+
+// ─── Animation hook ──────────────────────────────────────────────────────────
+// The viewer calls tickScene(elapsedSeconds) every frame.
+const _animators = [];
+export function tickScene(t) {
+  for (const fn of _animators) fn(t);
+}
+
 // ─── Interactables ───────────────────────────────────────────────────────────
 // Objects the player can inspect with [E]. The viewer raycasts against this
 // list only, so it stays cheap.
@@ -140,11 +242,11 @@ export function buildHouse(scene) {
 const GROUND_Y = -0.22;
 
 function buildGround(scene) {
-  const lawn = plane(200, 200, P.grass);
+  const lawn = plane(200, 200, P.grass, { map: repTex(TEX.grass, 80, 80) });
   lawn.position.set(0, GROUND_Y, 25);
   scene.add(lawn);
 
-  const forecourt = plane(40, 20, P.gravel);
+  const forecourt = plane(40, 20, P.gravel, { map: repTex(TEX.gravel, 20, 10) });
   forecourt.position.set(12, GROUND_Y + 0.01, -20);
   scene.add(forecourt);
 
@@ -169,7 +271,7 @@ function buildMainBlock(scene) {
   scene.add(slab);
 
   // Interior floor
-  const gFloor = plane(40, 20, P.floorWood);
+  const gFloor = plane(40, 20, P.floorWood, { map: repTex(TEX.wood, 20, 10) });
   gFloor.position.set(0, 0.01, 0);
   scene.add(gFloor);
 
@@ -291,7 +393,7 @@ function buildEntryHall(scene, fh) {
   const partW = box(0.2, fh, 12, P.offWhite);
   partW.position.set(-6, fh/2, -5);
   scene.add(partW);
-  const hallFloor = plane(14, 8, P.stoneDk);
+  const hallFloor = plane(14, 8, P.stoneDk, { map: repTex(TEX.paver, 12, 7) });
   hallFloor.position.set(0, 0.04, -8.5);
   scene.add(hallFloor);
   // Coat rack
@@ -422,14 +524,14 @@ function buildLivingRoom(scene, fh) {
 }
 
 function buildKitchen(scene, fh) {
-  const kFloor = plane(16, 16, P.marble);
+  const kFloor = plane(16, 16, P.marble, { map: repTex(TEX.marble, 4, 4) });
   kFloor.position.set(10, 0.04, -2);
   scene.add(kFloor);
   // Island
   const island = box(3.2, 0.9, 1.4, P.white);
   island.position.set(10, 0.45, -1);
   scene.add(island);
-  const islandTop = box(3.3, 0.04, 1.5, P.marble);
+  const islandTop = box(3.3, 0.04, 1.5, P.marble, { map: repTex(TEX.marble, 1, 1) });
   islandTop.position.set(10, 0.92, -1);
   inspectable(islandTop, 'Kitchen Island', 'A single slab of honed marble. Breakfast happens here; so does everything else.');
   scene.add(islandTop);
@@ -550,7 +652,7 @@ function buildStudy(scene, fh) {
   const wallW = box(0.2, fh, 7, P.offWhite);
   wallW.position.set(14.1, fh/2, 7.6);
   scene.add(wallW);
-  const studyFloor = plane(6, 8, P.floorWoodDk);
+  const studyFloor = plane(6, 8, P.floorWoodDk, { map: repTex(TEX.wood, 3, 4) });
   studyFloor.position.set(18, 0.04, 8);
   scene.add(studyFloor);
   // Desk
@@ -751,7 +853,7 @@ function buildFirstFloor(scene) {
     [4,    12, 2.5,   5],
   ];
   ffFloorPieces.forEach(([fw, fd, cx, cz]) => {
-    const f = plane(fw, fd, P.floorWood);
+    const f = plane(fw, fd, P.floorWood, { map: repTex(TEX.wood, fw / 2, fd / 2) });
     f.position.set(cx, FY + 0.01, cz);
     scene.add(f);
   });
@@ -932,18 +1034,10 @@ function buildRoof(scene) {
 
 // ─── Terrace ─────────────────────────────────────────────────────────────────
 function buildTerrace(scene) {
-  const terrace = new THREE.Mesh(new THREE.PlaneGeometry(42, 12), stdMat(P.stone));
-  terrace.rotation.x = -Math.PI/2;
+  // Paver pattern comes from the texture — replaces 35 separate joint meshes
+  const terrace = plane(42, 12, P.stone, { map: repTex(TEX.paver, 35, 10) });
   terrace.position.set(0, 0.02, 17);
-  terrace.receiveShadow = true;
   scene.add(terrace);
-  // Paver joints
-  for (let i = -20; i < 22; i += 1.2) {
-    const joint = new THREE.Mesh(new THREE.PlaneGeometry(0.04, 12), stdMat(P.stoneDk));
-    joint.rotation.x = -Math.PI/2;
-    joint.position.set(i, 0.025, 17);
-    scene.add(joint);
-  }
   // Steps down
   const step1 = box(40, 0.15, 0.5, P.stoneDk);
   step1.position.set(0, 0.075, 23.2);
@@ -988,16 +1082,35 @@ function buildTerrace(scene) {
 
 // ─── Pool ────────────────────────────────────────────────────────────────────
 function buildPool(scene) {
-  const poolSurround = plane(18, 7, P.stone);
+  const poolSurround = plane(18, 7, P.stone, { map: repTex(TEX.paver, 15, 6) });
   poolSurround.position.set(5, 0.01, 30);
   scene.add(poolSurround);
   // Walkable on purpose: with 0.55m step-up the player could never climb out
   // of the 1.4m-deep pool, so the surface is treated as floor.
-  const poolWater = plane(13.8, 3.4, P.water);
+  const waterGeo = new THREE.PlaneGeometry(13.8, 3.4, 48, 16);
+  const poolWater = new THREE.Mesh(waterGeo, stdMat(P.water, {
+    roughness: 0.12, metalness: 0.25, transparent: true, opacity: 0.85,
+  }));
+  poolWater.rotation.x = -Math.PI / 2;
   poolWater.position.set(5, -0.08, 30);
+  poolWater.receiveShadow = true;
+  poolWater.userData.noShadow = true;
   poolWater.userData.collide = 'floor';
   inspectable(poolWater, 'Lap Pool', 'Fourteen metres, unheated. Bracing in May, character-building in October.');
   scene.add(poolWater);
+  // Gentle two-wave surface wobble (local z = world up after the rotation)
+  const wPos = waterGeo.attributes.position;
+  _animators.push(t => {
+    for (let i = 0; i < wPos.count; i++) {
+      const x = wPos.getX(i), y = wPos.getY(i);
+      wPos.setZ(i,
+        Math.sin(x * 1.6 + t * 1.7) * 0.025 +
+        Math.cos((y + x * 0.5) * 2.4 + t * 2.3) * 0.018
+      );
+    }
+    wPos.needsUpdate = true;
+    waterGeo.computeVertexNormals();
+  });
   // Perimeter lip
   [[5, 30+1.75, 14.3, 0.12, 0.12], [5, 30-1.75, 14.3, 0.12, 0.12]].forEach(([x,z,w,h,d]) => {
     const lip = box(w, h, d, P.marble);
@@ -1030,7 +1143,7 @@ function buildPool(scene) {
 
 // ─── Garden ──────────────────────────────────────────────────────────────────
 function buildGarden(scene) {
-  const meadow = plane(30, 20, 0x7aaa40);
+  const meadow = plane(30, 20, 0x7aaa40, { map: repTex(TEX.grass, 12, 8) });
   meadow.position.set(-5, 0.02, 58);
   scene.add(meadow);
   // Wildflower patches
@@ -1050,7 +1163,7 @@ function buildGarden(scene) {
 // ─── Garden Studio ───────────────────────────────────────────────────────────
 function buildStudio(scene) {
   const sx = 22, sz = 35, sw = 7, sh = 2.8, sd = 5;
-  const sFloor = plane(sw, sd, P.floorWood);
+  const sFloor = plane(sw, sd, P.floorWood, { map: repTex(TEX.wood, 3.5, 2.5) });
   sFloor.position.set(sx, 0.01, sz);
   scene.add(sFloor);
   const wallS = box(sw, sh, 0.2, P.timber);
@@ -1075,7 +1188,7 @@ function buildStudio(scene) {
   inspectable(stDesk, 'Studio Desk', 'Far enough from the house that nobody asks how the work is going.');
   scene.add(stDesk);
   // Path
-  const stPath = plane(1.2, 6, P.gravel);
+  const stPath = plane(1.2, 6, P.gravel, { map: repTex(TEX.gravel, 0.6, 3) });
   stPath.position.set(sx - sw/2 - 0.6, 0.02, sz - 1);
   scene.add(stPath);
 }
@@ -1123,7 +1236,7 @@ function buildKitchenGarden(scene) {
   plants.userData.collide = 'none';
   plants.userData.noShadow = true;
   scene.add(plants);
-  const kgPath = plane(1.0, 16, P.gravel);
+  const kgPath = plane(1.0, 16, P.gravel, { map: repTex(TEX.gravel, 0.5, 8) });
   kgPath.position.set(kgx, 0.02, kgz);
   scene.add(kgPath);
   const butt = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.24, 0.8, 10), stdMat(P.steelDk));
@@ -1134,7 +1247,7 @@ function buildKitchenGarden(scene) {
 
 // ─── Driveway ────────────────────────────────────────────────────────────────
 function buildDriveway(scene) {
-  const drive = plane(14, 28, P.gravel);
+  const drive = plane(14, 28, P.gravel, { map: repTex(TEX.gravel, 7, 14) });
   drive.position.set(18, 0.02, -14);
   scene.add(drive);
   [-4, 4].forEach(dx => {
