@@ -126,13 +126,38 @@
       letter-spacing: 0.15em;
     }
     #overlay.hidden { opacity: 0; pointer-events: none; }
+    #controls {
+      display: grid;
+      grid-template-columns: auto auto;
+      gap: 7px 20px;
+      font-size: 13px;
+      letter-spacing: 0.12em;
+    }
+    #controls span:nth-child(odd) {
+      text-align: right;
+      color: rgba(255,255,255,0.85);
+      text-transform: uppercase;
+    }
+    #controls span:nth-child(even) {
+      color: rgba(255,255,255,0.4);
+    }
   </style>
 </head>
 <body>
 
 <div id="overlay">
   <h1>House</h1>
-  <p>Click to enter &nbsp;·&nbsp; WASD to move &nbsp;·&nbsp; Mouse to look</p>
+  <div id="controls">
+    <span>WASD</span><span>Move</span>
+    <span>Mouse</span><span>Look</span>
+    <span>Shift</span><span>Sprint</span>
+    <span>Space</span><span>Jump</span>
+    <span>E</span><span>Inspect</span>
+    <span>N</span><span>Time of day</span>
+    <span>P</span><span>Performance mode</span>
+    <span>Esc</span><span>Pause</span>
+  </div>
+  <p>Click to enter</p>
 </div>
 
 <div id="crosshair"></div>
@@ -141,7 +166,7 @@
 <div id="time-label">Noon</div>
 <div id="interact-hint">[ E ] Inspect</div>
 <div id="info-card"><h2></h2><p></p></div>
-<div id="hud">WASD · Mouse · E to interact</div>
+<div id="hud">WASD · E Inspect · N Time · Space Jump</div>
 
 <script type="importmap">
 {
@@ -311,10 +336,14 @@
   const STEP_UP     = 0.55;   // max step the player can climb per frame (stair height)
   const PLAYER_R    = 0.32;   // collision radius (m)
   const GRAVITY     = 16.0;   // m/s²
+  const JUMP_SPEED  = 5.2;    // initial jump velocity (≈0.85m apex)
   const SNAP_DIST   = 3.5;    // downward cast distance to look for floor
 
   let playerY    = -0.22;  // world Y of player feet (starts on forecourt at lawn level)
   let fallSpeed  = 0;     // vertical velocity (positive = falling)
+  let grounded   = true;
+  let bobPhase   = 0;     // head-bob oscillator
+  let bobAmp     = 0;     // eases in/out so the bob doesn't snap
 
   const _floorRay = new THREE.Raycaster();
   const _wallRay  = new THREE.Raycaster();
@@ -461,6 +490,15 @@ function resolveMovement(cx, cz, footY, dx, dz) {
     if (!locked) return;
     if (e.code === 'KeyN') {
       setTimeOfDay((timeIndex + 1) % TIMES.length);
+    } else if (e.code === 'KeyP') {
+      // Performance mode for low-end machines: no sun shadows, 1x pixel ratio
+      shadowsEnabled = !shadowsEnabled;
+      sun.castShadow = shadowsEnabled && TIMES[timeIndex].elev > 0;
+      const pr = shadowsEnabled ? Math.min(window.devicePixelRatio, 2) : 1;
+      renderer.setPixelRatio(pr);
+      composer.setPixelRatio(pr);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      composer.setSize(window.innerWidth, window.innerHeight);
     } else if (e.code === 'KeyE') {
       if (infoOpen) { hideInfo(); return; }
       if (lookTarget) {
@@ -511,31 +549,56 @@ function resolveMovement(cx, cz, footY, dx, dz) {
         resolved = { x: cx + move.x, z: cz + move.z };
       }
 
-      // Floor detection — look for ground below new position
+      // Vertical motion — grounded walking, jumping, falling
       if (floorMeshes.length > 0) {
-        const floorY = sampleFloor(resolved.x, resolved.z, playerY + STEP_UP);
-        if (floorY !== null) {
-          const targetY = floorY; // feet land here
-          // Smooth step-up / step-down
-          if (targetY > playerY + STEP_UP) {
-            // Too high to step up — don't advance horizontally
-            resolved = { x: cx, z: cz };
+        if (grounded && keys['Space']) {
+          fallSpeed = -JUMP_SPEED;
+          grounded = false;
+        }
+
+        if (grounded) {
+          const floorY = sampleFloor(resolved.x, resolved.z, playerY + STEP_UP);
+          if (floorY !== null) {
+            if (floorY > playerY + STEP_UP) {
+              // Too high to step up — don't advance horizontally
+              resolved = { x: cx, z: cz };
+            } else {
+              playerY += (floorY - playerY) * Math.min(1, 14 * delta); // smooth snap
+              fallSpeed = 0;
+            }
           } else {
-            const dy = targetY - playerY;
-            playerY += dy * Math.min(1, 14 * delta); // smooth snap
-            fallSpeed = 0;
+            grounded = false; // walked off an edge
           }
-        } else {
-          // No floor found — fall
+        }
+
+        if (!grounded) {
           fallSpeed += GRAVITY * delta;
           playerY -= fallSpeed * delta;
+          if (fallSpeed > 0) {
+            // Descending — look for a landing surface
+            const floorY = sampleFloor(resolved.x, resolved.z, playerY + 0.7);
+            if (floorY !== null && playerY <= floorY) {
+              playerY = floorY;
+              fallSpeed = 0;
+              grounded = true;
+            }
+          }
           playerY = Math.max(-5, playerY); // safety net
         }
       }
 
       camera.position.x = resolved.x;
       camera.position.z = resolved.z;
-      camera.position.y = playerY + EYE_HEIGHT;
+
+      // Head bob — eases in while walking on the ground, out when idle/airborne
+      const horizDist = Math.hypot(resolved.x - cx, resolved.z - cz);
+      if (grounded && horizDist > 0.0001) {
+        bobPhase += horizDist * 1.7;
+        bobAmp = Math.min(1, bobAmp + delta * 6);
+      } else {
+        bobAmp = Math.max(0, bobAmp - delta * 6);
+      }
+      camera.position.y = playerY + EYE_HEIGHT + Math.sin(bobPhase) * 0.035 * bobAmp;
     }
 
     camera.rotation.order = 'YXZ';
