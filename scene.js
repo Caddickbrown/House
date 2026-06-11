@@ -75,6 +75,16 @@ function plane(w, d, color, opts = {}) {
   return m;
 }
 
+// ─── Interactables ───────────────────────────────────────────────────────────
+// Objects the player can inspect with [E]. The viewer raycasts against this
+// list only, so it stays cheap.
+export const INTERACTABLES = [];
+function inspectable(mesh, name, text) {
+  mesh.userData.inspect = { name, text };
+  INTERACTABLES.push(mesh);
+  return mesh;
+}
+
 // ─── Room zones (for HUD label detection) ───────────────────────────────────
 export const ROOMS = [
   { label: 'Entry Hall',      x: 0,    z: -12,  r: 6  },
@@ -201,6 +211,7 @@ function buildSouthFacade(scene, fh, wt) {
   // Front door
   const door = box(1.1, 2.4, 0.06, P.steelDk);
   door.position.set(0, 1.2, -10.93);
+  inspectable(door, 'Front Door', 'Blackened steel, pivot-hung. It weighs more than it looks, and it looks heavy.');
   scene.add(door);
   const handle = box(0.05, 0.35, 0.06, 0xc8a838);
   handle.position.set(0.45, 1.1, -10.9);
@@ -232,6 +243,7 @@ function buildSouthFacade(scene, fh, wt) {
     const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.7, 7, 5), stdMat(0x8aaa78));
     canopy.position.set(x, 2.3, z);
     canopy.castShadow = true;
+    inspectable(canopy, 'Olive Tree', 'A matched pair flanks the entry. Eighty years old, transplanted with absurd care.');
     scene.add(canopy);
   });
 }
@@ -299,6 +311,8 @@ function buildEntryHall(scene, fh) {
   scene.add(ct);
   const vase = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.06, 0.3, 8), stdMat(0x5a9a60));
   vase.position.set(4, 0.95, -10.0);
+  vase.userData.noShadow = true;
+  inspectable(vase, 'Celadon Vase', 'Hand-thrown stoneware. The only object in the hall, which is the point.');
   scene.add(vase);
 }
 
@@ -320,6 +334,7 @@ function buildLivingRoom(scene, fh) {
   // Sofa — L-shaped
   const sofaBody = box(5, 0.7, 2.2, 0x5a7a8a);
   sofaBody.position.set(-14, 0.35, 1);
+  inspectable(sofaBody, 'Sofa', 'Low, deep, wool-upholstered in storm blue. Built for whole afternoons.');
   scene.add(sofaBody);
   const sofaBack = box(5, 0.9, 0.3, 0x4a6a7a);
   sofaBack.position.set(-14, 0.8, 2.05);
@@ -345,6 +360,8 @@ function buildLivingRoom(scene, fh) {
   scene.add(ctfGlass);
   const bk = box(0.35, 0.04, 0.25, 0x8a6030);
   bk.position.set(-13.2, 0.44, -0.5);
+  bk.userData.noShadow = true;
+  inspectable(bk, 'Monograph', 'A heavy book on concrete houses. Bought for the photographs, kept for the spine.');
   scene.add(bk);
   // Floor lamp
   const lp = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1.8, 8), stdMat(P.steelDk));
@@ -352,6 +369,8 @@ function buildLivingRoom(scene, fh) {
   scene.add(lp);
   const ls = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.18, 0.35, 12, 1, true), stdMat(0xe8e0c8, { side: THREE.DoubleSide }));
   ls.position.set(-11, 1.9, 1.5);
+  ls.userData.noShadow = true;
+  inspectable(ls, 'Floor Lamp', 'Linen shade on a steel stem. Warm light for the cold material palette.');
   scene.add(ls);
   const ll = new THREE.PointLight(0xffe8c0, 1.2, 8);
   ll.position.set(-11, 1.85, 1.5);
@@ -362,6 +381,7 @@ function buildLivingRoom(scene, fh) {
   scene.add(tvUnit);
   const tv = box(2.2, 1.3, 0.06, 0x0a0a0a);
   tv.position.set(-8, 1.7, -4.75);
+  inspectable(tv, 'Television', 'Mounted flush to the timber wall. Mostly off — the roof lantern is better viewing.');
   scene.add(tv);
   const tvGlow = box(2.1, 1.2, 0.02, 0x1a2030, { emissive: 0x0a1020, emissiveIntensity: 0.3 });
   tvGlow.position.set(-8, 1.7, -4.74);
@@ -369,6 +389,7 @@ function buildLivingRoom(scene, fh) {
   // Bookshelf built-in
   const bsf = box(2, fh * 0.85, 0.3, P.offWhite);
   bsf.position.set(-19.5, fh * 0.425, -6);
+  inspectable(bsf, 'Built-in Shelves', 'Novels, mostly. Arranged by neither colour nor author, to general distress.');
   scene.add(bsf);
   const lrBookColors = [0x8b4040, 0x406a8b, 0x5a8b40, 0x8b7040, 0x705a8b];
   const lrShelves = [0.6, 1.4, 2.2];
@@ -393,6 +414,7 @@ function buildLivingRoom(scene, fh) {
   // Large abstract artwork
   const art = box(1.8, 1.1, 0.04, 0x2a3a4a);
   art.position.set(-19.7, 2.0, 2);
+  inspectable(art, 'Abstract Painting', 'Blues on slate. The artist called it "Harbour, Remembered". The owners call it "the blue one".');
   scene.add(art);
   const artInner = box(1.6, 0.9, 0.02, 0x4a6a88);
   artInner.position.set(-19.68, 2.0, 2);
@@ -409,6 +431,7 @@ function buildKitchen(scene, fh) {
   scene.add(island);
   const islandTop = box(3.3, 0.04, 1.5, P.marble);
   islandTop.position.set(10, 0.92, -1);
+  inspectable(islandTop, 'Kitchen Island', 'A single slab of honed marble. Breakfast happens here; so does everything else.');
   scene.add(islandTop);
   // Bar stools
   [-0.8, 0, 0.8].forEach(dx => {
@@ -458,6 +481,7 @@ function buildKitchen(scene, fh) {
   // Fridge
   const fridge = box(0.7, 2.0, 0.65, P.steel, { roughness: 0.3, metalness: 0.6 });
   fridge.position.set(18.5, 1.0, 10.5);
+  inspectable(fridge, 'Refrigerator', 'Stainless, silent, and better stocked than it has any right to be.');
   scene.add(fridge);
   const fridgeHandle = box(0.04, 0.4, 0.06, P.steelDk);
   fridgeHandle.position.set(18.18, 1.4, 10.2);
@@ -472,6 +496,7 @@ function buildDining(scene, fh) {
   // Table
   const table = box(3.0, 0.06, 1.4, P.white);
   table.position.set(5, 0.75, 8);
+  inspectable(table, 'Dining Table', 'Seats six comfortably, eight with goodwill. The pendants are hung exactly 76cm above it.');
   scene.add(table);
   [[-1.2,-0.5],[1.2,-0.5],[-1.2,0.5],[1.2,0.5]].forEach(([dx,dz]) => {
     const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.72, 8), stdMat(P.steel));
@@ -513,6 +538,8 @@ function buildDining(scene, fh) {
   scene.add(sb);
   const decanter = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.08, 0.35, 8), stdMat(0x3a5a38, { transparent: true, opacity: 0.7 }));
   decanter.position.set(-2, 0.89, 10.4);
+  decanter.userData.noShadow = true;
+  inspectable(decanter, 'Decanter', 'Green glass, stoppered. Whatever is in it is older than the house.');
   scene.add(decanter);
 }
 
@@ -537,6 +564,7 @@ function buildStudy(scene, fh) {
   });
   const monitor = box(0.7, 0.42, 0.04, 0x0a0a0a);
   monitor.position.set(18, 0.99, 7.1);
+  inspectable(monitor, 'Study Desk', 'One monitor, one keyboard, no drawers. Clutter was designed out; it crept back in anyway.');
   scene.add(monitor);
   const kbd = box(0.45, 0.018, 0.15, P.steel);
   kbd.position.set(18, 0.79, 7.7);
@@ -555,6 +583,7 @@ function buildStudy(scene, fh) {
   // Bookshelves
   const bsf = box(0.25, fh * 0.9, 5, P.offWhite);
   bsf.position.set(19.8, fh * 0.45, 7);
+  inspectable(bsf, 'Library Wall', 'Reference, history, and one shelf of paperbacks nobody admits to.');
   scene.add(bsf);
   const stBookColors = [0x7a3a3a, 0x3a527a, 0x7a6030, 0x3a7a4a, 0x5a3a7a, 0x7a5a3a, 0x3a7a7a];
   const stShelves = [0.5, 1.2, 1.9, 2.6];
@@ -587,6 +616,7 @@ function buildUtility(scene, fh) {
   scene.add(wallW);
   const wm = box(0.65, 0.85, 0.6, P.white);
   wm.position.set(18.5, 0.425, -9.5);
+  inspectable(wm, 'Washing Machine', 'The least glamorous room in the house, and the most used.');
   scene.add(wm);
   const dryer = box(0.65, 0.85, 0.6, P.white);
   dryer.position.set(17.8, 0.425, -9.5);
@@ -667,6 +697,7 @@ function buildGarage(scene) {
   // Car
   const carBody = box(4.2, 1.3, 1.9, 0x2a2e32);
   carBody.position.set(26, 0.65, 1);
+  inspectable(carBody, 'The Car', 'Graphite grey, kept washed. Driven less than the house deserves.');
   scene.add(carBody);
   const carRoof = box(2.4, 0.6, 1.85, 0x22262a);
   carRoof.position.set(25.8, 1.6, 1);
@@ -775,6 +806,7 @@ function buildMasterSuite(scene, FY, FFH) {
   scene.add(mattress);
   const duvet = box(1.9, 0.14, 2.2, P.white);
   duvet.position.set(-14, FY + 0.56, 0.1);
+  inspectable(duvet, 'Master Bed', 'White linen, timber headboard, and the best view in the house from horizontal.');
   scene.add(duvet);
   const pillowL = box(0.7, 0.15, 0.55, P.white);
   pillowL.position.set(-14.55, FY + 0.64, -0.95);
@@ -964,6 +996,7 @@ function buildPool(scene) {
   const poolWater = plane(13.8, 3.4, P.water);
   poolWater.position.set(5, -0.08, 30);
   poolWater.userData.collide = 'floor';
+  inspectable(poolWater, 'Lap Pool', 'Fourteen metres, unheated. Bracing in May, character-building in October.');
   scene.add(poolWater);
   // Perimeter lip
   [[5, 30+1.75, 14.3, 0.12, 0.12], [5, 30-1.75, 14.3, 0.12, 0.12]].forEach(([x,z,w,h,d]) => {
@@ -1039,6 +1072,7 @@ function buildStudio(scene) {
   // Desk inside
   const stDesk = box(1.5, 0.05, 0.7, P.timberDk);
   stDesk.position.set(sx, 0.73, sz + 1.5);
+  inspectable(stDesk, 'Studio Desk', 'Far enough from the house that nobody asks how the work is going.');
   scene.add(stDesk);
   // Path
   const stPath = plane(1.2, 6, P.gravel);
@@ -1094,6 +1128,7 @@ function buildKitchenGarden(scene) {
   scene.add(kgPath);
   const butt = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.24, 0.8, 10), stdMat(P.steelDk));
   butt.position.set(kgx + 6, 0.4, kgz - 6);
+  inspectable(butt, 'Water Butt', 'Rainwater off the studio roof. The vegetables prefer it, apparently.');
   scene.add(butt);
 }
 

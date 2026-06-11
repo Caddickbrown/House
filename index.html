@@ -49,6 +49,34 @@
     }
     #interact-hint.visible { opacity: 1; }
 
+    #info-card {
+      position: fixed;
+      bottom: 96px; left: 50%;
+      transform: translateX(-50%);
+      max-width: 420px;
+      padding: 18px 28px;
+      background: rgba(8, 10, 12, 0.78);
+      border: 1px solid rgba(255,255,255,0.18);
+      text-align: center;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.25s;
+    }
+    #info-card.visible { opacity: 1; }
+    #info-card h2 {
+      color: rgba(255,255,255,0.92);
+      font-size: 14px;
+      font-weight: 400;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    #info-card p {
+      color: rgba(255,255,255,0.65);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
     #room-label {
       position: fixed;
       top: 32px; left: 50%;
@@ -101,6 +129,7 @@
 <div id="vignette"></div>
 <div id="room-label"></div>
 <div id="interact-hint">[ E ] Inspect</div>
+<div id="info-card"><h2></h2><p></p></div>
 <div id="hud">WASD · Mouse · E to interact</div>
 
 <script type="importmap">
@@ -177,9 +206,11 @@
 
   // ── Placeholder house (to be replaced by scene.js) ──────────────────────────
   let getRoomLabel = null;
-  import('./scene.js').then(({ buildHouse, getRoomLabel: grl }) => {
+  let interactables = [];
+  import('./scene.js').then(({ buildHouse, getRoomLabel: grl, INTERACTABLES }) => {
     buildHouse(scene);
     getRoomLabel = grl;
+    interactables = INTERACTABLES;
     scene.traverse(obj => {
       if (!obj.isMesh || obj === sky) return;
       const mat = obj.material;
@@ -316,6 +347,49 @@ function resolveMovement(cx, cz, footY, dx, dz) {
     pitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, pitch));
   });
 
+  // ── Inspection ([E]) ────────────────────────────────────────────────────────
+  const interactHintEl = document.getElementById('interact-hint');
+  const infoCardEl = document.getElementById('info-card');
+  const infoTitleEl = infoCardEl.querySelector('h2');
+  const infoTextEl = infoCardEl.querySelector('p');
+  const _lookRay = new THREE.Raycaster();
+  _lookRay.far = 3;
+  const _screenCentre = new THREE.Vector2(0, 0);
+  let lookTarget = null;
+  let infoOpen = false;
+
+  function hideInfo() {
+    infoOpen = false;
+    infoCardEl.classList.remove('visible');
+  }
+
+  function updateLookTarget() {
+    _lookRay.setFromCamera(_screenCentre, camera);
+    const hits = _lookRay.intersectObjects(interactables, false);
+    const obj = hits.length ? hits[0].object : null;
+    if (obj === lookTarget) return;
+    lookTarget = obj;
+    hideInfo();
+    if (obj) {
+      interactHintEl.textContent = `[ E ] ${obj.userData.inspect.name}`;
+      interactHintEl.classList.add('visible');
+    } else {
+      interactHintEl.classList.remove('visible');
+    }
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.code !== 'KeyE' || !locked) return;
+    if (infoOpen) { hideInfo(); return; }
+    if (lookTarget) {
+      const { name, text } = lookTarget.userData.inspect;
+      infoTitleEl.textContent = name;
+      infoTextEl.textContent = text;
+      infoCardEl.classList.add('visible');
+      infoOpen = true;
+    }
+  });
+
   // ── Animate ─────────────────────────────────────────────────────────────────
   const clock = new THREE.Clock();
   const roomLabelEl = document.getElementById('room-label');
@@ -383,6 +457,9 @@ function resolveMovement(cx, cz, footY, dx, dz) {
     if (getRoomLabel) {
       roomLabelEl.textContent = getRoomLabel(camera.position.x, camera.position.z, camera.position.y);
     }
+
+    // Inspect hint — what is the player looking at?
+    if (locked && interactables.length) updateLookTarget();
 
     composer.render();
   }
