@@ -36,19 +36,155 @@ const P = {
   soil:        0x5a4030,
 };
 
+// Materials are memoized — hundreds of meshes share a handful of materials
+// instead of each allocating its own.
+const _matCache = new Map();
 function stdMat(color, opts = {}) {
-  return new THREE.MeshStandardMaterial({ color, roughness: 0.8, metalness: 0.0, ...opts });
+  let key = color;
+  for (const k in opts) {
+    const v = opts[k];
+    key += '|' + k + ':' + (v && v.isTexture ? v.uuid : v);
+  }
+  let m = _matCache.get(key);
+  if (!m) {
+    m = new THREE.MeshStandardMaterial({ color, roughness: 0.8, metalness: 0.0, ...opts });
+    _matCache.set(key, m);
+  }
+  return m;
 }
+
+// All boxes/planes share one unit geometry, sized via mesh.scale —
+// normals, raycasts and bounding boxes all handle non-uniform scale.
+const _unitBox = new THREE.BoxGeometry(1, 1, 1);
+const _unitPlane = new THREE.PlaneGeometry(1, 1);
+const _dummy = new THREE.Object3D();
+const _color = new THREE.Color();
+
 function box(w, h, d, color, opts = {}) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), stdMat(color, opts));
+  const m = new THREE.Mesh(_unitBox, stdMat(color, opts));
+  m.scale.set(w, h, d);
   m.castShadow = true; m.receiveShadow = true;
   return m;
 }
 function plane(w, d, color, opts = {}) {
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), stdMat(color, opts));
+  const m = new THREE.Mesh(_unitPlane, stdMat(color, opts));
+  m.scale.set(w, d, 1);
   m.rotation.x = -Math.PI / 2;
   m.receiveShadow = true;
+  m.userData.noShadow = true; // horizontal surfaces never need to cast
   return m;
+}
+
+// ─── Procedural textures ─────────────────────────────────────────────────────
+// Small canvases drawn once at load. They are kept near-white so the
+// material colour still dominates (maps multiply with material.color).
+function makeTexture(size, draw) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  draw(c.getContext('2d'), size);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+// Same image, different tiling — clones share the underlying canvas.
+function repTex(base, rx, ry) {
+  const t = base.clone();
+  t.repeat.set(rx, ry);
+  t.needsUpdate = true;
+  return t;
+}
+
+function speckleDraw(base, amp, count) {
+  return (ctx, s) => {
+    ctx.fillStyle = `rgb(${base},${base},${base})`;
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < count; i++) {
+      const v = base + (Math.random() - 0.5) * 2 * amp;
+      ctx.fillStyle = `rgb(${v|0},${v|0},${v|0})`;
+      const r = 1 + Math.random() * 2.5;
+      ctx.fillRect(Math.random() * s, Math.random() * s, r, r);
+    }
+  };
+}
+
+const TEX = {
+  grass: makeTexture(256, (ctx, s) => {
+    ctx.fillStyle = '#dcdcdc';
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 3500; i++) {
+      const v = 185 + Math.random() * 70;
+      ctx.strokeStyle = `rgb(${v|0},${v|0},${v|0})`;
+      const x = Math.random() * s, y = Math.random() * s;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + (Math.random() - 0.5) * 3, y - 2 - Math.random() * 3);
+      ctx.stroke();
+    }
+  }),
+  gravel: makeTexture(256, speckleDraw(215, 55, 5000)),
+  wood: makeTexture(256, (ctx, s) => {
+    ctx.fillStyle = '#e6e0d8';
+    ctx.fillRect(0, 0, s, s);
+    const plankW = s / 4;
+    for (let p = 0; p < 4; p++) {
+      // grain streaks
+      for (let i = 0; i < 40; i++) {
+        const v = 200 + Math.random() * 50;
+        ctx.strokeStyle = `rgba(${v|0},${(v*0.96)|0},${(v*0.9)|0},0.5)`;
+        const x = p * plankW + Math.random() * plankW;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.bezierCurveTo(x + 4, s * 0.3, x - 4, s * 0.7, x + 2, s);
+        ctx.stroke();
+      }
+      // plank joint
+      ctx.fillStyle = 'rgba(90,75,60,0.55)';
+      ctx.fillRect(p * plankW, 0, 2, s);
+    }
+  }),
+  marble: makeTexture(256, (ctx, s) => {
+    ctx.fillStyle = '#f2efec';
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 9; i++) {
+      const g = 175 + Math.random() * 50;
+      ctx.strokeStyle = `rgba(${g|0},${g|0},${(g+6)|0},0.55)`;
+      ctx.lineWidth = 0.6 + Math.random() * 1.4;
+      ctx.beginPath();
+      ctx.moveTo(Math.random() * s, 0);
+      ctx.bezierCurveTo(Math.random() * s, s * 0.33, Math.random() * s, s * 0.66, Math.random() * s, s);
+      ctx.stroke();
+    }
+  }),
+  paver: makeTexture(256, (ctx, s) => {
+    ctx.fillStyle = '#e2ded8';
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 2200; i++) {
+      const v = 195 + Math.random() * 50;
+      ctx.fillStyle = `rgb(${v|0},${v|0},${v|0})`;
+      ctx.fillRect(Math.random() * s, Math.random() * s, 2, 2);
+    }
+    ctx.fillStyle = 'rgba(70,64,58,0.7)';
+    ctx.fillRect(0, 0, 3, s);
+    ctx.fillRect(0, 0, s, 3);
+  }),
+};
+
+// ─── Animation hook ──────────────────────────────────────────────────────────
+// The viewer calls tickScene(elapsedSeconds, deltaSeconds) every frame.
+const _animators = [];
+export function tickScene(t, dt) {
+  for (const fn of _animators) fn(t, dt);
+}
+
+// ─── Interactables ───────────────────────────────────────────────────────────
+// Objects the player can inspect with [E]. The viewer raycasts against this
+// list only, so it stays cheap.
+export const INTERACTABLES = [];
+function inspectable(mesh, name, text) {
+  mesh.userData.inspect = { name, text };
+  INTERACTABLES.push(mesh);
+  return mesh;
 }
 
 // ─── Room zones (for HUD label detection) ───────────────────────────────────
@@ -106,11 +242,11 @@ export function buildHouse(scene) {
 const GROUND_Y = -0.22;
 
 function buildGround(scene) {
-  const lawn = plane(200, 200, P.grass);
+  const lawn = plane(200, 200, P.grass, { map: repTex(TEX.grass, 80, 80) });
   lawn.position.set(0, GROUND_Y, 25);
   scene.add(lawn);
 
-  const forecourt = plane(40, 20, P.gravel);
+  const forecourt = plane(40, 20, P.gravel, { map: repTex(TEX.gravel, 20, 10) });
   forecourt.position.set(12, GROUND_Y + 0.01, -20);
   scene.add(forecourt);
 
@@ -135,7 +271,7 @@ function buildMainBlock(scene) {
   scene.add(slab);
 
   // Interior floor
-  const gFloor = plane(40, 20, P.floorWood);
+  const gFloor = plane(40, 20, P.floorWood, { map: repTex(TEX.wood, 20, 10) });
   gFloor.position.set(0, 0.01, 0);
   scene.add(gFloor);
 
@@ -168,19 +304,43 @@ function buildSouthFacade(scene, fh, wt) {
   cladTop.position.set(0, fh - 0.9, -10.9);
   scene.add(cladTop);
 
-  // Large glass panes
+  // Large glass panes — fixed glazing, so they block (the openable front
+  // door is the way in; the north facade sliders stay passable)
   [-8, 8].forEach(x => {
     const gl = box(6, fh - 0.5, 0.08, P.glass, { transparent: true, opacity: 0.4, roughness: 0.05, metalness: 0.3 });
     gl.position.set(x, fh/2 - 0.25, -10.95);
+    gl.userData.collide = 'wall';
     scene.add(gl);
   });
-  // Front door
+  // Sidelights between the door and the big panes (was an invisible gap)
+  [-2.8, 2.8].forEach(x => {
+    const gl = box(4.4, fh - 0.5, 0.08, P.glass, { transparent: true, opacity: 0.4, roughness: 0.05, metalness: 0.3 });
+    gl.position.set(x, fh/2 - 0.25, -10.95);
+    gl.userData.collide = 'wall';
+    scene.add(gl);
+  });
+  // Front door — hinged on a group so [E] swings it open/closed.
+  // Collision follows automatically: the door mesh is a tagged wall and
+  // raycasts respect its animated world matrix.
+  const doorGroup = new THREE.Group();
+  doorGroup.position.set(-0.55, 0, -10.93);
   const door = box(1.1, 2.4, 0.06, P.steelDk);
-  door.position.set(0, 1.2, -10.93);
-  scene.add(door);
+  door.position.set(0.55, 1.2, 0);
+  door.userData.collide = 'wall';
+  doorGroup.add(door);
   const handle = box(0.05, 0.35, 0.06, 0xc8a838);
-  handle.position.set(0.45, 1.1, -10.9);
-  scene.add(handle);
+  handle.position.set(1.0, 1.1, 0.05);
+  handle.userData.collide = 'none';
+  handle.userData.noShadow = true;
+  doorGroup.add(handle);
+  scene.add(doorGroup);
+  const doorState = { open: false };
+  inspectable(door, 'Front Door', 'Blackened steel, pivot-hung. It weighs more than it looks, and it looks heavy.');
+  door.userData.inspect.action = () => { doorState.open = !doorState.open; };
+  _animators.push((t, dt) => {
+    const target = doorState.open ? -1.85 : 0; // swings inward, away from the steps
+    doorGroup.rotation.y += (target - doorGroup.rotation.y) * Math.min(1, 6 * (dt || 0.016));
+  });
   // Flanking panels
   [-14, 14].forEach(x => {
     const pan = box(6, fh, wt, P.concrete);
@@ -208,6 +368,7 @@ function buildSouthFacade(scene, fh, wt) {
     const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.7, 7, 5), stdMat(0x8aaa78));
     canopy.position.set(x, 2.3, z);
     canopy.castShadow = true;
+    inspectable(canopy, 'Olive Tree', 'A matched pair flanks the entry. Eighty years old, transplanted with absurd care.');
     scene.add(canopy);
   });
 }
@@ -246,6 +407,7 @@ function buildEastFacade(scene, fh, wt) {
   for (let y = 0.3; y < fh - 0.3; y += 0.35) {
     const strip = box(0.05, 0.05, 21, P.timber);
     strip.position.set(20.1, y, 0);
+    strip.userData.noShadow = true;
     scene.add(strip);
   }
 }
@@ -254,7 +416,7 @@ function buildEntryHall(scene, fh) {
   const partW = box(0.2, fh, 12, P.offWhite);
   partW.position.set(-6, fh/2, -5);
   scene.add(partW);
-  const hallFloor = plane(14, 8, P.stoneDk);
+  const hallFloor = plane(14, 8, P.stoneDk, { map: repTex(TEX.paver, 12, 7) });
   hallFloor.position.set(0, 0.04, -8.5);
   scene.add(hallFloor);
   // Coat rack
@@ -265,6 +427,7 @@ function buildEntryHall(scene, fh) {
     const hook = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.18, 6), stdMat(P.steel));
     hook.position.set(-4 + dx, 1.82, -10.45);
     hook.rotation.x = 0.4;
+    hook.userData.noShadow = true;
     scene.add(hook);
   });
   // Console table
@@ -273,6 +436,8 @@ function buildEntryHall(scene, fh) {
   scene.add(ct);
   const vase = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.06, 0.3, 8), stdMat(0x5a9a60));
   vase.position.set(4, 0.95, -10.0);
+  vase.userData.noShadow = true;
+  inspectable(vase, 'Celadon Vase', 'Hand-thrown stoneware. The only object in the hall, which is the point.');
   scene.add(vase);
 }
 
@@ -284,6 +449,7 @@ function buildLivingRoom(scene, fh) {
   for (let y = 0.3; y < fh - 0.2; y += 0.4) {
     const g = box(0.05, 0.05, 20, P.timberDk);
     g.position.set(-19.75, y, 0);
+    g.userData.noShadow = true;
     scene.add(g);
   }
   // Area rug
@@ -293,6 +459,7 @@ function buildLivingRoom(scene, fh) {
   // Sofa — L-shaped
   const sofaBody = box(5, 0.7, 2.2, 0x5a7a8a);
   sofaBody.position.set(-14, 0.35, 1);
+  inspectable(sofaBody, 'Sofa', 'Low, deep, wool-upholstered in storm blue. Built for whole afternoons.');
   scene.add(sofaBody);
   const sofaBack = box(5, 0.9, 0.3, 0x4a6a7a);
   sofaBack.position.set(-14, 0.8, 2.05);
@@ -318,6 +485,8 @@ function buildLivingRoom(scene, fh) {
   scene.add(ctfGlass);
   const bk = box(0.35, 0.04, 0.25, 0x8a6030);
   bk.position.set(-13.2, 0.44, -0.5);
+  bk.userData.noShadow = true;
+  inspectable(bk, 'Monograph', 'A heavy book on concrete houses. Bought for the photographs, kept for the spine.');
   scene.add(bk);
   // Floor lamp
   const lp = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1.8, 8), stdMat(P.steelDk));
@@ -325,6 +494,8 @@ function buildLivingRoom(scene, fh) {
   scene.add(lp);
   const ls = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.18, 0.35, 12, 1, true), stdMat(0xe8e0c8, { side: THREE.DoubleSide }));
   ls.position.set(-11, 1.9, 1.5);
+  ls.userData.noShadow = true;
+  inspectable(ls, 'Floor Lamp', 'Linen shade on a steel stem. Warm light for the cold material palette.');
   scene.add(ls);
   const ll = new THREE.PointLight(0xffe8c0, 1.2, 8);
   ll.position.set(-11, 1.85, 1.5);
@@ -335,6 +506,7 @@ function buildLivingRoom(scene, fh) {
   scene.add(tvUnit);
   const tv = box(2.2, 1.3, 0.06, 0x0a0a0a);
   tv.position.set(-8, 1.7, -4.75);
+  inspectable(tv, 'Television', 'Mounted flush to the timber wall. Mostly off — the roof lantern is better viewing.');
   scene.add(tv);
   const tvGlow = box(2.1, 1.2, 0.02, 0x1a2030, { emissive: 0x0a1020, emissiveIntensity: 0.3 });
   tvGlow.position.set(-8, 1.7, -4.74);
@@ -342,21 +514,32 @@ function buildLivingRoom(scene, fh) {
   // Bookshelf built-in
   const bsf = box(2, fh * 0.85, 0.3, P.offWhite);
   bsf.position.set(-19.5, fh * 0.425, -6);
+  inspectable(bsf, 'Built-in Shelves', 'Novels, mostly. Arranged by neither colour nor author, to general distress.');
   scene.add(bsf);
-  [0.6, 1.4, 2.2].forEach(y => {
+  const lrBookColors = [0x8b4040, 0x406a8b, 0x5a8b40, 0x8b7040, 0x705a8b];
+  const lrShelves = [0.6, 1.4, 2.2];
+  const lrBooks = new THREE.InstancedMesh(_unitBox, stdMat(0xffffff), lrShelves.length * lrBookColors.length);
+  let lrBi = 0;
+  lrShelves.forEach(y => {
     const plank = box(1.9, 0.03, 0.28, P.timberDk);
     plank.position.set(-19.5, y, -6);
     scene.add(plank);
-    const bookColors = [0x8b4040, 0x406a8b, 0x5a8b40, 0x8b7040, 0x705a8b];
-    bookColors.forEach((c, i) => {
-      const bkm = box(0.12, 0.28, 0.25, c);
-      bkm.position.set(-20.3 + i * 0.15, y + 0.15, -6);
-      scene.add(bkm);
+    lrBookColors.forEach((c, i) => {
+      _dummy.position.set(-20.3 + i * 0.15, y + 0.15, -6);
+      _dummy.scale.set(0.12, 0.28, 0.25);
+      _dummy.updateMatrix();
+      lrBooks.setMatrixAt(lrBi, _dummy.matrix);
+      lrBooks.setColorAt(lrBi, _color.setHex(c));
+      lrBi++;
     });
   });
+  lrBooks.userData.collide = 'none';
+  lrBooks.userData.noShadow = true;
+  scene.add(lrBooks);
   // Large abstract artwork
   const art = box(1.8, 1.1, 0.04, 0x2a3a4a);
   art.position.set(-19.7, 2.0, 2);
+  inspectable(art, 'Abstract Painting', 'Blues on slate. The artist called it "Harbour, Remembered". The owners call it "the blue one".');
   scene.add(art);
   const artInner = box(1.6, 0.9, 0.02, 0x4a6a88);
   artInner.position.set(-19.68, 2.0, 2);
@@ -364,15 +547,16 @@ function buildLivingRoom(scene, fh) {
 }
 
 function buildKitchen(scene, fh) {
-  const kFloor = plane(16, 16, P.marble);
+  const kFloor = plane(16, 16, P.marble, { map: repTex(TEX.marble, 4, 4) });
   kFloor.position.set(10, 0.04, -2);
   scene.add(kFloor);
   // Island
   const island = box(3.2, 0.9, 1.4, P.white);
   island.position.set(10, 0.45, -1);
   scene.add(island);
-  const islandTop = box(3.3, 0.04, 1.5, P.marble);
+  const islandTop = box(3.3, 0.04, 1.5, P.marble, { map: repTex(TEX.marble, 1, 1) });
   islandTop.position.set(10, 0.92, -1);
+  inspectable(islandTop, 'Kitchen Island', 'A single slab of honed marble. Breakfast happens here; so does everything else.');
   scene.add(islandTop);
   // Bar stools
   [-0.8, 0, 0.8].forEach(dx => {
@@ -402,6 +586,7 @@ function buildKitchen(scene, fh) {
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.015, 4, 16), stdMat(0x303030));
     ring.rotation.x = Math.PI/2;
     ring.position.set(9.5+dx, 0.94, -1+dz);
+    ring.userData.noShadow = true;
     scene.add(ring);
   });
   // Extractor hood
@@ -421,6 +606,7 @@ function buildKitchen(scene, fh) {
   // Fridge
   const fridge = box(0.7, 2.0, 0.65, P.steel, { roughness: 0.3, metalness: 0.6 });
   fridge.position.set(18.5, 1.0, 10.5);
+  inspectable(fridge, 'Refrigerator', 'Stainless, silent, and better stocked than it has any right to be.');
   scene.add(fridge);
   const fridgeHandle = box(0.04, 0.4, 0.06, P.steelDk);
   fridgeHandle.position.set(18.18, 1.4, 10.2);
@@ -435,6 +621,7 @@ function buildDining(scene, fh) {
   // Table
   const table = box(3.0, 0.06, 1.4, P.white);
   table.position.set(5, 0.75, 8);
+  inspectable(table, 'Dining Table', 'Seats six comfortably, eight with goodwill. The pendants are hung exactly 76cm above it.');
   scene.add(table);
   [[-1.2,-0.5],[1.2,-0.5],[-1.2,0.5],[1.2,0.5]].forEach(([dx,dz]) => {
     const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.72, 8), stdMat(P.steel));
@@ -476,6 +663,8 @@ function buildDining(scene, fh) {
   scene.add(sb);
   const decanter = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.08, 0.35, 8), stdMat(0x3a5a38, { transparent: true, opacity: 0.7 }));
   decanter.position.set(-2, 0.89, 10.4);
+  decanter.userData.noShadow = true;
+  inspectable(decanter, 'Decanter', 'Green glass, stoppered. Whatever is in it is older than the house.');
   scene.add(decanter);
 }
 
@@ -486,7 +675,7 @@ function buildStudy(scene, fh) {
   const wallW = box(0.2, fh, 7, P.offWhite);
   wallW.position.set(14.1, fh/2, 7.6);
   scene.add(wallW);
-  const studyFloor = plane(6, 8, P.floorWoodDk);
+  const studyFloor = plane(6, 8, P.floorWoodDk, { map: repTex(TEX.wood, 3, 4) });
   studyFloor.position.set(18, 0.04, 8);
   scene.add(studyFloor);
   // Desk
@@ -500,6 +689,7 @@ function buildStudy(scene, fh) {
   });
   const monitor = box(0.7, 0.42, 0.04, 0x0a0a0a);
   monitor.position.set(18, 0.99, 7.1);
+  inspectable(monitor, 'Study Desk', 'One monitor, one keyboard, no drawers. Clutter was designed out; it crept back in anyway.');
   scene.add(monitor);
   const kbd = box(0.45, 0.018, 0.15, P.steel);
   kbd.position.set(18, 0.79, 7.7);
@@ -518,18 +708,28 @@ function buildStudy(scene, fh) {
   // Bookshelves
   const bsf = box(0.25, fh * 0.9, 5, P.offWhite);
   bsf.position.set(19.8, fh * 0.45, 7);
+  inspectable(bsf, 'Library Wall', 'Reference, history, and one shelf of paperbacks nobody admits to.');
   scene.add(bsf);
-  [0.5, 1.2, 1.9, 2.6].forEach(y => {
+  const stBookColors = [0x7a3a3a, 0x3a527a, 0x7a6030, 0x3a7a4a, 0x5a3a7a, 0x7a5a3a, 0x3a7a7a];
+  const stShelves = [0.5, 1.2, 1.9, 2.6];
+  const stBooks = new THREE.InstancedMesh(_unitBox, stdMat(0xffffff), stShelves.length * stBookColors.length);
+  let stBi = 0;
+  stShelves.forEach(y => {
     const plk = box(0.22, 0.03, 4.8, P.timber);
     plk.position.set(19.8, y, 7);
     scene.add(plk);
-    const bookColors = [0x7a3a3a, 0x3a527a, 0x7a6030, 0x3a7a4a, 0x5a3a7a, 0x7a5a3a, 0x3a7a7a];
-    bookColors.forEach((c, i) => {
-      const bkm = box(0.12, 0.22, 0.21, c);
-      bkm.position.set(17.6 + i * 0.14, y + 0.13, 7);
-      scene.add(bkm);
+    stBookColors.forEach((c, i) => {
+      _dummy.position.set(17.6 + i * 0.14, y + 0.13, 7);
+      _dummy.scale.set(0.12, 0.22, 0.21);
+      _dummy.updateMatrix();
+      stBooks.setMatrixAt(stBi, _dummy.matrix);
+      stBooks.setColorAt(stBi, _color.setHex(c));
+      stBi++;
     });
   });
+  stBooks.userData.collide = 'none';
+  stBooks.userData.noShadow = true;
+  scene.add(stBooks);
 }
 
 function buildUtility(scene, fh) {
@@ -541,6 +741,7 @@ function buildUtility(scene, fh) {
   scene.add(wallW);
   const wm = box(0.65, 0.85, 0.6, P.white);
   wm.position.set(18.5, 0.425, -9.5);
+  inspectable(wm, 'Washing Machine', 'The least glamorous room in the house, and the most used.');
   scene.add(wm);
   const dryer = box(0.65, 0.85, 0.6, P.white);
   dryer.position.set(17.8, 0.425, -9.5);
@@ -574,9 +775,10 @@ function buildStaircase(scene, fh) {
     step.position.set(2.5, i * stepH + stepH/2, -8.0 + i * stepD);
     scene.add(step);
   }
-  // Glass balustrade
+  // Glass balustrade — must block despite being glass
   const bal = box(0.04, 0.9, stepCount * stepD + 0.2, P.glass, { transparent: true, opacity: 0.3 });
   bal.position.set(1.8, fh * 0.5, -8.0 + stepCount * stepD / 2);
+  bal.userData.collide = 'wall';
   scene.add(bal);
   const rail = box(0.04, 0.04, stepCount * stepD + 0.3, P.steelDk);
   rail.position.set(1.8, fh * 0.9, -8.0 + stepCount * stepD / 2);
@@ -613,12 +815,14 @@ function buildGarage(scene) {
     [0.5, 1.0, 1.5, 2.0].forEach(y => {
       const rib = box(5.5, 0.04, 0.04, P.steelDk);
       rib.position.set(26 + dx, y, -4.96);
+      rib.userData.noShadow = true;
       scene.add(rib);
     });
   });
   // Car
   const carBody = box(4.2, 1.3, 1.9, 0x2a2e32);
   carBody.position.set(26, 0.65, 1);
+  inspectable(carBody, 'The Car', 'Graphite grey, kept washed. Driven less than the house deserves.');
   scene.add(carBody);
   const carRoof = box(2.4, 0.6, 1.85, 0x22262a);
   carRoof.position.set(25.8, 1.6, 1);
@@ -672,17 +876,14 @@ function buildFirstFloor(scene) {
     [4,    12, 2.5,   5],
   ];
   ffFloorPieces.forEach(([fw, fd, cx, cz]) => {
-    const f = plane(fw, fd, P.floorWood);
+    const f = plane(fw, fd, P.floorWood, { map: repTex(TEX.wood, fw / 2, fd / 2) });
     f.position.set(cx, FY + 0.01, cz);
     scene.add(f);
   });
-  // (removed single ffFloor plane — replaced above)
-  const ffFloor = { position: { set: () => {} } }; // dummy to avoid reference errors below
-  scene.add(ffFloor);
-
-  // Gallery balustrade overlooking living room
+  // Gallery balustrade overlooking living room — must block despite being glass
   const bal = box(0.04, 0.9, 6, P.glass, { transparent: true, opacity: 0.35 });
   bal.position.set(-2, FY + 0.45, 0);
+  bal.userData.collide = 'wall';
   scene.add(bal);
   const rail = box(0.04, 0.04, 6.1, P.steelDk);
   rail.position.set(-2, FY + 0.9, 0);
@@ -730,6 +931,7 @@ function buildMasterSuite(scene, FY, FFH) {
   scene.add(mattress);
   const duvet = box(1.9, 0.14, 2.2, P.white);
   duvet.position.set(-14, FY + 0.56, 0.1);
+  inspectable(duvet, 'Master Bed', 'White linen, timber headboard, and the best view in the house from horizontal.');
   scene.add(duvet);
   const pillowL = box(0.7, 0.15, 0.55, P.white);
   pillowL.position.set(-14.55, FY + 0.64, -0.95);
@@ -855,18 +1057,10 @@ function buildRoof(scene) {
 
 // ─── Terrace ─────────────────────────────────────────────────────────────────
 function buildTerrace(scene) {
-  const terrace = new THREE.Mesh(new THREE.PlaneGeometry(42, 12), stdMat(P.stone));
-  terrace.rotation.x = -Math.PI/2;
+  // Paver pattern comes from the texture — replaces 35 separate joint meshes
+  const terrace = plane(42, 12, P.stone, { map: repTex(TEX.paver, 35, 10) });
   terrace.position.set(0, 0.02, 17);
-  terrace.receiveShadow = true;
   scene.add(terrace);
-  // Paver joints
-  for (let i = -20; i < 22; i += 1.2) {
-    const joint = new THREE.Mesh(new THREE.PlaneGeometry(0.04, 12), stdMat(P.stoneDk));
-    joint.rotation.x = -Math.PI/2;
-    joint.position.set(i, 0.025, 17);
-    scene.add(joint);
-  }
   // Steps down
   const step1 = box(40, 0.15, 0.5, P.stoneDk);
   step1.position.set(0, 0.075, 23.2);
@@ -911,12 +1105,35 @@ function buildTerrace(scene) {
 
 // ─── Pool ────────────────────────────────────────────────────────────────────
 function buildPool(scene) {
-  const poolSurround = plane(18, 7, P.stone);
+  const poolSurround = plane(18, 7, P.stone, { map: repTex(TEX.paver, 15, 6) });
   poolSurround.position.set(5, 0.01, 30);
   scene.add(poolSurround);
-  const poolWater = plane(13.8, 3.4, P.water);
+  // Walkable on purpose: with 0.55m step-up the player could never climb out
+  // of the 1.4m-deep pool, so the surface is treated as floor.
+  const waterGeo = new THREE.PlaneGeometry(13.8, 3.4, 48, 16);
+  const poolWater = new THREE.Mesh(waterGeo, stdMat(P.water, {
+    roughness: 0.12, metalness: 0.25, transparent: true, opacity: 0.85,
+  }));
+  poolWater.rotation.x = -Math.PI / 2;
   poolWater.position.set(5, -0.08, 30);
+  poolWater.receiveShadow = true;
+  poolWater.userData.noShadow = true;
+  poolWater.userData.collide = 'floor';
+  inspectable(poolWater, 'Lap Pool', 'Fourteen metres, unheated. Bracing in May, character-building in October.');
   scene.add(poolWater);
+  // Gentle two-wave surface wobble (local z = world up after the rotation)
+  const wPos = waterGeo.attributes.position;
+  _animators.push(t => {
+    for (let i = 0; i < wPos.count; i++) {
+      const x = wPos.getX(i), y = wPos.getY(i);
+      wPos.setZ(i,
+        Math.sin(x * 1.6 + t * 1.7) * 0.025 +
+        Math.cos((y + x * 0.5) * 2.4 + t * 2.3) * 0.018
+      );
+    }
+    wPos.needsUpdate = true;
+    waterGeo.computeVertexNormals();
+  });
   // Perimeter lip
   [[5, 30+1.75, 14.3, 0.12, 0.12], [5, 30-1.75, 14.3, 0.12, 0.12]].forEach(([x,z,w,h,d]) => {
     const lip = box(w, h, d, P.marble);
@@ -949,7 +1166,7 @@ function buildPool(scene) {
 
 // ─── Garden ──────────────────────────────────────────────────────────────────
 function buildGarden(scene) {
-  const meadow = plane(30, 20, 0x7aaa40);
+  const meadow = plane(30, 20, 0x7aaa40, { map: repTex(TEX.grass, 12, 8) });
   meadow.position.set(-5, 0.02, 58);
   scene.add(meadow);
   // Wildflower patches
@@ -957,6 +1174,7 @@ function buildGarden(scene) {
     const patch = new THREE.Mesh(new THREE.CircleGeometry(1.4, 8), stdMat(0xc88040));
     patch.rotation.x = -Math.PI/2;
     patch.position.set(x, 0.03, z);
+    patch.userData.noShadow = true;
     scene.add(patch);
   });
   // Retaining wall
@@ -968,7 +1186,7 @@ function buildGarden(scene) {
 // ─── Garden Studio ───────────────────────────────────────────────────────────
 function buildStudio(scene) {
   const sx = 22, sz = 35, sw = 7, sh = 2.8, sd = 5;
-  const sFloor = plane(sw, sd, P.floorWood);
+  const sFloor = plane(sw, sd, P.floorWood, { map: repTex(TEX.wood, 3.5, 2.5) });
   sFloor.position.set(sx, 0.01, sz);
   scene.add(sFloor);
   const wallS = box(sw, sh, 0.2, P.timber);
@@ -990,9 +1208,10 @@ function buildStudio(scene) {
   // Desk inside
   const stDesk = box(1.5, 0.05, 0.7, P.timberDk);
   stDesk.position.set(sx, 0.73, sz + 1.5);
+  inspectable(stDesk, 'Studio Desk', 'Far enough from the house that nobody asks how the work is going.');
   scene.add(stDesk);
   // Path
-  const stPath = plane(1.2, 6, P.gravel);
+  const stPath = plane(1.2, 6, P.gravel, { map: repTex(TEX.gravel, 0.6, 3) });
   stPath.position.set(sx - sw/2 - 0.6, 0.02, sz - 1);
   scene.add(stPath);
 }
@@ -1011,36 +1230,47 @@ function buildKitchenGarden(scene) {
     wall.position.set(x, h/2, z);
     scene.add(wall);
   });
-  // Raised beds
-  [[-2,-3],[2,-3],[-2,2],[2,2]].forEach(([dx,dz]) => {
+  // Raised beds — all 120 plants in a single InstancedMesh (unit-height
+  // cylinder, randomized per-instance Y scale)
+  const beds = [[-2,-3],[2,-3],[-2,2],[2,2]];
+  const ROWS = 5, COLS = 6;
+  const plants = new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(0.05, 0.06, 1, 5),
+    stdMat(0x4a8a30),
+    beds.length * ROWS * COLS
+  );
+  let pi = 0;
+  beds.forEach(([dx,dz]) => {
     const bed = box(2.8, 0.35, 2.2, P.stoneDk);
     bed.position.set(kgx+dx, 0.175, kgz+dz);
     scene.add(bed);
     const soil = plane(2.6, 2.0, P.soil);
     soil.position.set(kgx+dx, 0.36, kgz+dz);
     scene.add(soil);
-    for (let r = -0.7; r <= 0.7; r += 0.35) {
-      for (let c = -0.8; c <= 0.8; c += 0.3) {
-        const plant = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.05, 0.06, 0.18 + Math.random()*0.12, 5),
-          stdMat(0x4a8a30)
-        );
-        plant.position.set(kgx+dx+c, 0.48, kgz+dz+r);
-        scene.add(plant);
+    for (let ri = 0; ri < ROWS; ri++) {
+      for (let ci = 0; ci < COLS; ci++) {
+        _dummy.position.set(kgx+dx-0.8+ci*0.3, 0.48, kgz+dz-0.7+ri*0.35);
+        _dummy.scale.set(1, 0.18 + Math.random()*0.12, 1);
+        _dummy.updateMatrix();
+        plants.setMatrixAt(pi++, _dummy.matrix);
       }
     }
   });
-  const kgPath = plane(1.0, 16, P.gravel);
+  plants.userData.collide = 'none';
+  plants.userData.noShadow = true;
+  scene.add(plants);
+  const kgPath = plane(1.0, 16, P.gravel, { map: repTex(TEX.gravel, 0.5, 8) });
   kgPath.position.set(kgx, 0.02, kgz);
   scene.add(kgPath);
   const butt = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.24, 0.8, 10), stdMat(P.steelDk));
   butt.position.set(kgx + 6, 0.4, kgz - 6);
+  inspectable(butt, 'Water Butt', 'Rainwater off the studio roof. The vegetables prefer it, apparently.');
   scene.add(butt);
 }
 
 // ─── Driveway ────────────────────────────────────────────────────────────────
 function buildDriveway(scene) {
-  const drive = plane(14, 28, P.gravel);
+  const drive = plane(14, 28, P.gravel, { map: repTex(TEX.gravel, 7, 14) });
   drive.position.set(18, 0.02, -14);
   scene.add(drive);
   [-4, 4].forEach(dx => {
@@ -1054,6 +1284,7 @@ function buildDriveway(scene) {
   [-25, -22, -19].forEach(z => {
     const bollard = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.6, 8), stdMat(P.steelDk));
     bollard.position.set(22, 0.3, z);
+    bollard.userData.noShadow = true;
     scene.add(bollard);
     const bl = new THREE.PointLight(0xffee88, 0.4, 4);
     bl.position.set(22, 0.65, z);
@@ -1070,25 +1301,33 @@ function buildTrees(scene) {
     [12, -16, 0.5], [12, -20, 0.5], [12, -24, 0.5], // avenue
     [-25, 15, 0.75], [-28, 5, 0.7],
   ];
+  // Two draw calls for all trees: instanced trunks + instanced canopies.
+  // Trunks are tagged 'wall' — raycasting against InstancedMesh respects
+  // instance matrices, so each trunk still blocks movement individually.
+  const trunks = new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(0.18, 0.22, 1, 8), stdMat(P.timberDk), treeData.length
+  );
+  const canopies = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(1, 7, 5), stdMat(P.grass), treeData.length * 3
+  );
+  let ti = 0, ci = 0;
   treeData.forEach(([x, z, scale]) => {
     const trunkH = 3.5 * scale;
-    const trunk = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.18 * scale, 0.22 * scale, trunkH, 8),
-      stdMat(P.timberDk)
-    );
-    trunk.position.set(x, trunkH/2, z);
-    trunk.castShadow = true;
-    scene.add(trunk);
+    _dummy.position.set(x, trunkH/2, z);
+    _dummy.scale.set(scale, trunkH, scale);
+    _dummy.updateMatrix();
+    trunks.setMatrixAt(ti++, _dummy.matrix);
     [[0, trunkH + 1.2*scale, 0, 2.0*scale],
      [-0.6*scale, trunkH + 0.7*scale, 0.4*scale, 1.4*scale],
      [0.5*scale, trunkH + 0.9*scale, -0.3*scale, 1.5*scale]].forEach(([dx,dy,dz,r]) => {
-      const canopy = new THREE.Mesh(
-        new THREE.SphereGeometry(r, 7, 5),
-        stdMat(P.grass)
-      );
-      canopy.position.set(x+dx, dy, z+dz);
-      canopy.castShadow = true;
-      scene.add(canopy);
+      _dummy.position.set(x+dx, dy, z+dz);
+      _dummy.scale.set(r, r, r);
+      _dummy.updateMatrix();
+      canopies.setMatrixAt(ci++, _dummy.matrix);
     });
   });
+  trunks.userData.collide = 'wall';
+  canopies.userData.collide = 'none';
+  scene.add(trunks);
+  scene.add(canopies);
 }
