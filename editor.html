@@ -199,25 +199,20 @@ scene.add(new THREE.HemisphereLight(0x6080a0, 0x403830, 0.6));
 let houseGroup = null;
 try {
   const sceneModule = await import('./scene.js');
-  if (sceneModule.buildScene) {
-    houseGroup = sceneModule.buildScene();
-    scene.add(houseGroup);
-  } else if (sceneModule.default) {
-    // Some versions export default group
-    houseGroup = sceneModule.default;
-    if (houseGroup instanceof THREE.Object3D) scene.add(houseGroup);
+  if (sceneModule.buildHouse) {
+    sceneModule.buildHouse(scene);
   }
 } catch (e) {
-  console.warn('Could not import scene.js as module (expected — scene.js may not export):', e.message);
+  console.warn('Could not load house geometry:', e.message);
 }
 
-// Fallback floor so editor is usable even without the full house
+// Fallback floor (invisible — only used for raycasting when house geometry isn't present)
 const floor = new THREE.Mesh(
   new THREE.PlaneGeometry(80, 80),
-  new THREE.MeshStandardMaterial({ color: 0xc8a070, roughness: 0.9 })
+  new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide })
 );
 floor.rotation.x = -Math.PI / 2;
-floor.receiveShadow = true;
+floor.receiveShadow = false;
 floor.userData.isFloor = true;
 scene.add(floor);
 
