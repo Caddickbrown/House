@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>House Editor</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a1c1e; color: #e8e0d8; font-family: 'Georgia', serif; overflow: hidden; display: flex; height: 100vh; }
+
+    #canvas-wrap { flex: 1; position: relative; }
+    canvas { display: block; width: 100%; height: 100%; }
+
+    /* ── Sidebar ── */
+    #sidebar {
+      width: 240px; min-width: 240px;
+      background: #111315;
+      border-left: 1px solid #2a2e34;
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+    #sidebar-header {
+      padding: 16px 16px 10px;
+      font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+      color: #888; border-bottom: 1px solid #2a2e34;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    #save-btn {
+      background: #3a6a3a; color: #b8e8b8;
+      border: none; padding: 4px 12px; cursor: pointer;
+      font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    }
+    #save-btn:hover { background: #4a8a4a; }
+    #save-btn.saving { background: #2a4a2a; }
+
+    #cat-tabs {
+      display: flex; flex-wrap: wrap; gap: 4px;
+      padding: 10px 12px; border-bottom: 1px solid #2a2e34;
+    }
+    .cat-tab {
+      background: #222528; border: 1px solid #333;
+      color: #aaa; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+      padding: 4px 8px; cursor: pointer;
+    }
+    .cat-tab.active { background: #2a4a6a; border-color: #4a8aaa; color: #aadde8; }
+
+    #catalog-list {
+      flex: 1; overflow-y: auto; padding: 8px;
+    }
+    .cat-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 8px; cursor: pointer;
+      border-radius: 2px; margin-bottom: 2px;
+      font-size: 13px; color: #c8c0b8;
+    }
+    .cat-item:hover { background: #1e2428; }
+    .cat-item.selected { background: #1e3048; color: #7abcdc; }
+    .cat-swatch {
+      width: 14px; height: 14px; border-radius: 2px; flex-shrink: 0;
+      border: 1px solid rgba(255,255,255,0.12);
+    }
+
+    /* ── Selection panel ── */
+    #sel-panel {
+      border-top: 1px solid #2a2e34;
+      padding: 12px;
+      display: none;
+    }
+    #sel-panel.visible { display: block; }
+    #sel-name { font-size: 12px; color: #aaa; letter-spacing: 0.1em; margin-bottom: 8px; text-transform: uppercase; }
+    .sel-row { display: flex; gap: 6px; margin-bottom: 6px; }
+    .sel-btn {
+      flex: 1; background: #222528; border: 1px solid #333;
+      color: #ccc; font-size: 11px; padding: 6px; cursor: pointer;
+      text-transform: uppercase; letter-spacing: 0.1em;
+    }
+    .sel-btn:hover { background: #2a2e34; }
+    .sel-btn.danger { border-color: #6a2828; color: #e88; }
+    .sel-btn.danger:hover { background: #3a1818; }
+
+    /* ── Status bar ── */
+    #statusbar {
+      position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+      background: rgba(10,12,14,0.82);
+      border: 1px solid rgba(255,255,255,0.1);
+      padding: 6px 18px; font-size: 12px; letter-spacing: 0.08em;
+      color: rgba(255,255,255,0.65); pointer-events: none;
+      white-space: nowrap;
+    }
+
+    /* ── Place ghost hint ── */
+    #place-hint {
+      position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+      background: rgba(10,12,14,0.82); border: 1px solid #4a8aaa;
+      padding: 7px 20px; font-size: 12px; color: #7abcdc; letter-spacing: 0.08em;
+      pointer-events: none; display: none;
+    }
+    #place-hint.visible { display: block; }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #111; }
+    ::-webkit-scrollbar-thumb { background: #333; }
+  </style>
+</head>
+<body>
+
+<div id="canvas-wrap">
+  <canvas id="c"></canvas>
+  <div id="statusbar">Orbit: drag · Zoom: scroll · Select: click · Place: choose item from panel</div>
+  <div id="place-hint">Click floor to place — Escape to cancel</div>
+</div>
+
+<div id="sidebar">
+  <div id="sidebar-header">
+    Furniture
+    <button id="save-btn">Save</button>
+  </div>
+  <div id="cat-tabs"></div>
+  <div id="catalog-list"></div>
+  <div id="sel-panel">
+    <div id="sel-name"></div>
+    <div class="sel-row">
+      <button class="sel-btn" id="btn-rot-ccw">↺ Rotate</button>
+      <button class="sel-btn" id="btn-rot-cw">↻ Rotate</button>
+    </div>
+    <div class="sel-row">
+      <button class="sel-btn danger" id="btn-delete">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CATALOG } from './furniture-catalog.js';
+
+// ── Renderer ──────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1e22);
+scene.fog = new THREE.Fog(0x1a1e22, 40, 90);
+
+// ── Camera ────────────────────────────────────────────────────────────────────
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 200);
+camera.position.set(0, 28, 28);
+camera.lookAt(0, 0, 0);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0, 0);
+controls.maxPolarAngle = Math.PI / 2.05;
+controls.minDistance = 4;
+controls.maxDistance = 80;
+controls.enableDamping = true;
+controls.dampingFactor = 0.1;
+
+// ── Resize ────────────────────────────────────────────────────────────────────
+function resize() {
+  const wrap = canvas.parentElement;
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(canvas.parentElement);
+resize();
+
+// ── Lighting ──────────────────────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0x8090a0, 1.4));
+const sun = new THREE.DirectionalLight(0xffe8d0, 2.4);
+sun.position.set(20, 40, 20);
+sun.castShadow = true;
+sun.shadow.camera.near = 1;
+sun.shadow.camera.far = 120;
+sun.shadow.camera.left = sun.shadow.camera.bottom = -50;
+sun.shadow.camera.right = sun.shadow.camera.top = 50;
+sun.shadow.mapSize.set(2048, 2048);
+scene.add(sun);
+scene.add(new THREE.HemisphereLight(0x6080a0, 0x403830, 0.6));
+
+// ── Import the house scene geometry ──────────────────────────────────────────
+// We dynamically import scene.js but only use its exported geometry
+// If scene.js doesn't export anything we just get the house without furniture
+let houseGroup = null;
+try {
+  const sceneModule = await import('./scene.js');
+  if (sceneModule.buildScene) {
+    houseGroup = sceneModule.buildScene();
+    scene.add(houseGroup);
+  } else if (sceneModule.default) {
+    // Some versions export default group
+    houseGroup = sceneModule.default;
+    if (houseGroup instanceof THREE.Object3D) scene.add(houseGroup);
+  }
+} catch (e) {
+  console.warn('Could not import scene.js as module (expected — scene.js may not export):', e.message);
+}
+
+// Fallback floor so editor is usable even without the full house
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(80, 80),
+  new THREE.MeshStandardMaterial({ color: 0xc8a070, roughness: 0.9 })
+);
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+floor.userData.isFloor = true;
+scene.add(floor);
+
+// Ghost floor for raycasting (always present)
+const ghostFloor = new THREE.Mesh(
+  new THREE.PlaneGeometry(200, 200),
+  new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide })
+);
+ghostFloor.rotation.x = -Math.PI / 2;
+ghostFloor.userData.isGhostFloor = true;
+scene.add(ghostFloor);
+
+// Grid helper
+const grid = new THREE.GridHelper(80, 80, 0x334455, 0x22303a);
+grid.position.y = 0.005;
+scene.add(grid);
+
+// ── Furniture state ───────────────────────────────────────────────────────────
+// Each placed item: { id, x, z, rotY }  (y is always floor level = 0)
+let placedItems = [];    // data
+let placedMeshes = [];   // parallel array of THREE.Group
+
+// ── Load saved furniture ──────────────────────────────────────────────────────
+async function loadFurniture() {
+  try {
+    const r = await fetch('/api/furniture');
+    if (r.ok) {
+      placedItems = await r.json();
+      for (const item of placedItems) spawnMesh(item, false);
+    }
+  } catch (e) { console.warn('Could not load furniture:', e); }
+}
+
+function spawnMesh(item, addToData) {
+  const def = CATALOG.find(c => c.id === item.id);
+  if (!def) return null;
+  const g = def.build();
+  g.position.set(item.x, 0, item.z);
+  g.rotation.y = item.rotY || 0;
+  g.userData.furnitureId = item.id;
+  g.userData.dataIndex = placedMeshes.length;
+  scene.add(g);
+  placedMeshes.push(g);
+  if (addToData) placedItems.push(item);
+  return g;
+}
+
+await loadFurniture();
+
+// ── Save ──────────────────────────────────────────────────────────────────────
+const saveBtn = document.getElementById('save-btn');
+async function save() {
+  saveBtn.textContent = 'Saving…';
+  saveBtn.classList.add('saving');
+  try {
+    await fetch('/api/furniture', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(placedItems),
+    });
+    saveBtn.textContent = 'Saved ✓';
+    setTimeout(() => { saveBtn.textContent = 'Save'; saveBtn.classList.remove('saving'); }, 1500);
+  } catch (e) {
+    saveBtn.textContent = 'Error!';
+    setTimeout(() => { saveBtn.textContent = 'Save'; saveBtn.classList.remove('saving'); }, 2000);
+  }
+}
+saveBtn.addEventListener('click', save);
+window.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); }
+});
+
+// ── Catalog sidebar ───────────────────────────────────────────────────────────
+const categories = [...new Set(CATALOG.map(c => c.category))];
+let activeCategory = categories[0];
+let selectedCatalogId = null;
+
+const catTabs = document.getElementById('cat-tabs');
+const catalogList = document.getElementById('catalog-list');
+
+function buildSidebar() {
+  catTabs.innerHTML = '';
+  categories.forEach(cat => {
+    const t = document.createElement('button');
+    t.className = 'cat-tab' + (cat === activeCategory ? ' active' : '');
+    t.textContent = cat;
+    t.addEventListener('click', () => { activeCategory = cat; buildSidebar(); });
+    catTabs.appendChild(t);
+  });
+
+  catalogList.innerHTML = '';
+  CATALOG.filter(c => c.category === activeCategory).forEach(def => {
+    const row = document.createElement('div');
+    row.className = 'cat-item' + (def.id === selectedCatalogId ? ' selected' : '');
+    const swatch = document.createElement('div');
+    swatch.className = 'cat-swatch';
+    swatch.style.background = def.color;
+    row.appendChild(swatch);
+    const label = document.createElement('span');
+    label.textContent = def.label;
+    row.appendChild(label);
+    row.addEventListener('click', () => {
+      selectedCatalogId = (selectedCatalogId === def.id) ? null : def.id;
+      if (selectedCatalogId) enterPlaceMode(def.id);
+      else cancelPlace();
+      buildSidebar();
+    });
+    catalogList.appendChild(row);
+  });
+}
+buildSidebar();
+
+// ── Place mode ────────────────────────────────────────────────────────────────
+let placeMode = false;
+let placeModeId = null;
+let ghostMesh = null;
+const placeHint = document.getElementById('place-hint');
+
+function enterPlaceMode(id) {
+  cancelPlace();
+  placeMode = true;
+  placeModeId = id;
+  controls.enablePan = false;
+
+  const def = CATALOG.find(c => c.id === id);
+  ghostMesh = def.build();
+  ghostMesh.traverse(obj => {
+    if (obj.isMesh) {
+      obj.material = obj.material.clone();
+      obj.material.transparent = true;
+      obj.material.opacity = 0.45;
+    }
+  });
+  ghostMesh.userData.isGhost = true;
+  scene.add(ghostMesh);
+  placeHint.classList.add('visible');
+  document.getElementById('statusbar').textContent = 'Click floor to place — Escape to cancel — R to rotate';
+}
+
+function cancelPlace() {
+  if (ghostMesh) { scene.remove(ghostMesh); ghostMesh = null; }
+  placeMode = false;
+  placeModeId = null;
+  controls.enablePan = true;
+  placeHint.classList.remove('visible');
+  selectedCatalogId = null;
+  document.getElementById('statusbar').textContent = 'Orbit: drag · Zoom: scroll · Select: click · Place: choose item from panel';
+  buildSidebar();
+}
+
+// ── Selection ─────────────────────────────────────────────────────────────────
+let selectedMesh = null;
+const selPanel = document.getElementById('sel-panel');
+const selName = document.getElementById('sel-name');
+
+function selectMesh(mesh) {
+  deselectAll();
+  selectedMesh = mesh;
+  // Highlight
+  mesh.traverse(obj => {
+    if (obj.isMesh && !obj.userData._origEmissive) {
+      obj.userData._origEmissive = obj.material.emissive ? obj.material.emissive.clone() : new THREE.Color(0);
+      obj.material = obj.material.clone();
+      obj.material.emissive = new THREE.Color(0x2a4a6a);
+      obj.material.emissiveIntensity = 0.5;
+    }
+  });
+  const def = CATALOG.find(c => c.id === mesh.userData.furnitureId);
+  selName.textContent = def ? def.label : mesh.userData.furnitureId;
+  selPanel.classList.add('visible');
+}
+
+function deselectAll() {
+  if (selectedMesh) {
+    selectedMesh.traverse(obj => {
+      if (obj.isMesh && obj.userData._origEmissive !== undefined) {
+        obj.material.emissive.copy(obj.userData._origEmissive);
+        obj.material.emissiveIntensity = 0;
+        delete obj.userData._origEmissive;
+      }
+    });
+    selectedMesh = null;
+  }
+  selPanel.classList.remove('visible');
+}
+
+document.getElementById('btn-rot-ccw').addEventListener('click', () => {
+  if (!selectedMesh) return;
+  selectedMesh.rotation.y += Math.PI / 2;
+  syncRotation(selectedMesh);
+});
+document.getElementById('btn-rot-cw').addEventListener('click', () => {
+  if (!selectedMesh) return;
+  selectedMesh.rotation.y -= Math.PI / 2;
+  syncRotation(selectedMesh);
+});
+document.getElementById('btn-delete').addEventListener('click', () => {
+  if (!selectedMesh) return;
+  deleteMesh(selectedMesh);
+});
+
+function syncRotation(mesh) {
+  const idx = placedMeshes.indexOf(mesh);
+  if (idx !== -1) placedItems[idx].rotY = mesh.rotation.y;
+}
+
+function deleteMesh(mesh) {
+  const idx = placedMeshes.indexOf(mesh);
+  if (idx === -1) return;
+  scene.remove(mesh);
+  placedMeshes.splice(idx, 1);
+  placedItems.splice(idx, 1);
+  // Re-index remaining meshes
+  placedMeshes.forEach((m, i) => { m.userData.dataIndex = i; });
+  deselectAll();
+}
+
+// ── Raycaster ─────────────────────────────────────────────────────────────────
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let ghostRotY = 0;
+
+function getPointerNDC(e) {
+  const rect = canvas.getBoundingClientRect();
+  pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+}
+
+canvas.addEventListener('mousemove', e => {
+  if (!placeMode || !ghostMesh) return;
+  getPointerNDC(e);
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObject(ghostFloor);
+  if (hits.length) {
+    const pt = hits[0].point;
+    ghostMesh.position.set(Math.round(pt.x * 2) / 2, 0, Math.round(pt.z * 2) / 2);
+    ghostMesh.rotation.y = ghostRotY;
+  }
+});
+
+let mouseDownPos = { x: 0, y: 0 };
+canvas.addEventListener('mousedown', e => {
+  mouseDownPos = { x: e.clientX, y: e.clientY };
+});
+
+canvas.addEventListener('click', e => {
+  // Ignore drags
+  const dx = e.clientX - mouseDownPos.x, dy = e.clientY - mouseDownPos.y;
+  if (Math.abs(dx) > 4 || Math.abs(dy) > 4) return;
+
+  getPointerNDC(e);
+  raycaster.setFromCamera(pointer, camera);
+
+  if (placeMode) {
+    const hits = raycaster.intersectObject(ghostFloor);
+    if (hits.length) {
+      const pt = hits[0].point;
+      const item = {
+        id: placeModeId,
+        x: Math.round(pt.x * 2) / 2,
+        z: Math.round(pt.z * 2) / 2,
+        rotY: ghostRotY,
+      };
+      spawnMesh(item, true);
+      // Stay in place mode for rapid placement
+    }
+    return;
+  }
+
+  // Selection: collect all furniture meshes
+  const meshList = [];
+  placedMeshes.forEach(g => {
+    g.traverse(obj => { if (obj.isMesh) meshList.push(obj); });
+  });
+  const hits = raycaster.intersectObjects(meshList, false);
+  if (hits.length) {
+    // Walk up to find the root Group
+    let obj = hits[0].object;
+    while (obj.parent && !obj.userData.furnitureId) obj = obj.parent;
+    if (obj.userData.furnitureId) {
+      if (selectedMesh === obj) deselectAll();
+      else selectMesh(obj);
+      return;
+    }
+  }
+  deselectAll();
+});
+
+// ── Drag to move selected furniture ──────────────────────────────────────────
+let dragging = false;
+let dragMesh = null;
+const dragOffset = new THREE.Vector3();
+
+canvas.addEventListener('mousedown', e => {
+  if (placeMode || e.button !== 0) return;
+  if (!selectedMesh) return;
+
+  getPointerNDC(e);
+  raycaster.setFromCamera(pointer, camera);
+
+  // Check if we clicked on the selected mesh
+  const meshList = [];
+  selectedMesh.traverse(obj => { if (obj.isMesh) meshList.push(obj); });
+  const hits = raycaster.intersectObjects(meshList, false);
+  if (hits.length) {
+    dragging = true;
+    dragMesh = selectedMesh;
+    controls.enabled = false;
+    const floorHit = raycaster.intersectObject(ghostFloor);
+    if (floorHit.length) {
+      dragOffset.set(
+        dragMesh.position.x - floorHit[0].point.x,
+        0,
+        dragMesh.position.z - floorHit[0].point.z
+      );
+    }
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  if (!dragging || !dragMesh) return;
+  getPointerNDC(e);
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObject(ghostFloor);
+  if (hits.length) {
+    const pt = hits[0].point;
+    const nx = Math.round((pt.x + dragOffset.x) * 2) / 2;
+    const nz = Math.round((pt.z + dragOffset.z) * 2) / 2;
+    dragMesh.position.set(nx, 0, nz);
+    const idx = placedMeshes.indexOf(dragMesh);
+    if (idx !== -1) { placedItems[idx].x = nx; placedItems[idx].z = nz; }
+  }
+});
+
+canvas.addEventListener('mouseup', () => {
+  if (dragging) { dragging = false; dragMesh = null; controls.enabled = true; }
+});
+
+// ── Keyboard shortcuts ────────────────────────────────────────────────────────
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { cancelPlace(); deselectAll(); }
+  if (e.key === 'r' || e.key === 'R') {
+    if (placeMode) {
+      ghostRotY += Math.PI / 2;
+      if (ghostMesh) ghostMesh.rotation.y = ghostRotY;
+    } else if (selectedMesh) {
+      selectedMesh.rotation.y += Math.PI / 2;
+      syncRotation(selectedMesh);
+    }
+  }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selectedMesh) {
+    e.preventDefault();
+    deleteMesh(selectedMesh);
+  }
+});
+
+// ── Render loop ───────────────────────────────────────────────────────────────
+function loop() {
+  requestAnimationFrame(loop);
+  controls.update();
+  renderer.render(scene, camera);
+}
+loop();
+</script>
+</body>
+</html>
