@@ -96,6 +96,19 @@
     }
     #place-hint.visible { display: block; }
 
+    /* ── Floor switcher ── */
+    #floor-bar {
+      display: flex; gap: 0; border-bottom: 1px solid #2a2e34;
+    }
+    .floor-btn {
+      flex: 1; background: #111315; border: none; border-right: 1px solid #2a2e34;
+      color: #666; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+      padding: 9px 4px; cursor: pointer;
+    }
+    .floor-btn:last-child { border-right: none; }
+    .floor-btn.active { background: #1e2e40; color: #7abcdc; }
+    .floor-btn:hover:not(.active) { background: #181c20; color: #aaa; }
+
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: #111; }
     ::-webkit-scrollbar-thumb { background: #333; }
@@ -113,6 +126,11 @@
   <div id="sidebar-header">
     Furniture
     <button id="save-btn">Save</button>
+  </div>
+  <div id="floor-bar">
+    <button class="floor-btn active" data-floor="all">All</button>
+    <button class="floor-btn" data-floor="ground">Ground</button>
+    <button class="floor-btn" data-floor="first">First</button>
   </div>
   <div id="cat-tabs"></div>
   <div id="catalog-list"></div>
@@ -216,7 +234,7 @@ floor.receiveShadow = false;
 floor.userData.isFloor = true;
 scene.add(floor);
 
-// Ghost floor for raycasting (always present)
+// Ghost floor for raycasting (always present, Y moves with active floor)
 const ghostFloor = new THREE.Mesh(
   new THREE.PlaneGeometry(200, 200),
   new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide })
@@ -250,7 +268,8 @@ function spawnMesh(item, addToData) {
   const def = CATALOG.find(c => c.id === item.id);
   if (!def) return null;
   const g = def.build();
-  g.position.set(item.x, 0, item.z);
+  const yBase = item.y || 0;
+  g.position.set(item.x, yBase, item.z);
   g.rotation.y = item.rotY || 0;
   g.userData.furnitureId = item.id;
   g.userData.dataIndex = placedMeshes.length;
@@ -285,7 +304,80 @@ window.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); }
 });
 
-// ── Catalog sidebar ───────────────────────────────────────────────────────────
+// ── Floor isolation ───────────────────────────────────────────────────────────
+// Ground floor: y = 0–3.7.  First floor: y = 3.7+.
+// In "floor" mode we use a clipping plane to hide everything above/below,
+// dim the ceiling so you can see into the rooms, and snap the camera.
+const FIRST_FLOOR_Y = 3.7;  // matches GFH=3.4 + slab 0.3 from scene.js
+
+const clipAbove = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0); // hides y > threshold
+const clipBelow = new THREE.Plane(new THREE.Vector3(0,  1, 0), 0); // hides y < threshold
+
+let activeFloor = 'all'; // 'all' | 'ground' | 'first'
+
+// Furniture Y baseline per floor
+function floorBaseY(floor) {
+  return floor === 'first' ? FIRST_FLOOR_Y : 0;
+}
+
+function setFloor(floor) {
+  activeFloor = floor;
+
+  if (floor === 'all') {
+    renderer.clippingPlanes = [];
+    // Restore full camera range
+    controls.minPolarAngle = 0;
+    controls.maxPolarAngle = Math.PI / 2.05;
+    camera.position.set(0, 28, 28);
+    controls.target.set(0, 0, 0);
+  } else if (floor === 'ground') {
+    // Clip everything above just above ceiling of ground floor
+    clipAbove.constant = FIRST_FLOOR_Y + 0.2;
+    renderer.clippingPlanes = [clipAbove];
+    // Camera: top-down-ish over ground floor centre
+    camera.position.set(0, 18, 22);
+    controls.target.set(0, 0, 0);
+  } else if (floor === 'first') {
+    // Clip everything below the first floor slab and above its ceiling
+    clipBelow.constant = -(FIRST_FLOOR_Y - 0.1);
+    renderer.clippingPlanes = [clipBelow];
+    // Camera: elevated to first floor level
+    camera.position.set(0, FIRST_FLOOR_Y + 18, 22);
+    controls.target.set(0, FIRST_FLOOR_Y, 0);
+  }
+
+  controls.update();
+
+  // Move ghost floor plane to the active floor level for raycasting
+  ghostFloor.position.y = floorBaseY(floor);
+
+  // Dim/brighten furniture meshes on other floors
+  placedMeshes.forEach((mesh, i) => {
+    const itemY = placedItems[i].y || 0;
+    const onThisFloor = floor === 'all'
+      || (floor === 'ground' && itemY < FIRST_FLOOR_Y)
+      || (floor === 'first'  && itemY >= FIRST_FLOOR_Y);
+    mesh.traverse(obj => {
+      if (obj.isMesh) obj.visible = onThisFloor || floor === 'all';
+    });
+  });
+
+  // Update buttons
+  document.querySelectorAll('.floor-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.floor === floor);
+  });
+
+  // Update statusbar
+  const floorLabel = { all: 'All floors', ground: 'Ground floor', first: 'First floor' }[floor];
+  document.getElementById('statusbar').textContent =
+    `${floorLabel} · Orbit: drag · Zoom: scroll · Select: click · Place: choose item from panel`;
+}
+
+document.querySelectorAll('.floor-btn').forEach(btn => {
+  btn.addEventListener('click', () => setFloor(btn.dataset.floor));
+});
+
+
 const categories = [...new Set(CATALOG.map(c => c.category))];
 let activeCategory = categories[0];
 let selectedCatalogId = null;
@@ -448,7 +540,8 @@ canvas.addEventListener('mousemove', e => {
   const hits = raycaster.intersectObject(ghostFloor);
   if (hits.length) {
     const pt = hits[0].point;
-    ghostMesh.position.set(Math.round(pt.x * 2) / 2, 0, Math.round(pt.z * 2) / 2);
+    const yBase = floorBaseY(activeFloor);
+    ghostMesh.position.set(Math.round(pt.x * 2) / 2, yBase, Math.round(pt.z * 2) / 2);
     ghostMesh.rotation.y = ghostRotY;
   }
 });
@@ -470,14 +563,15 @@ canvas.addEventListener('click', e => {
     const hits = raycaster.intersectObject(ghostFloor);
     if (hits.length) {
       const pt = hits[0].point;
+      const yBase = floorBaseY(activeFloor);
       const item = {
         id: placeModeId,
         x: Math.round(pt.x * 2) / 2,
+        y: yBase,
         z: Math.round(pt.z * 2) / 2,
         rotY: ghostRotY,
       };
       spawnMesh(item, true);
-      // Stay in place mode for rapid placement
     }
     return;
   }
@@ -541,7 +635,8 @@ canvas.addEventListener('mousemove', e => {
     const pt = hits[0].point;
     const nx = Math.round((pt.x + dragOffset.x) * 2) / 2;
     const nz = Math.round((pt.z + dragOffset.z) * 2) / 2;
-    dragMesh.position.set(nx, 0, nz);
+    const ny = dragMesh.position.y; // preserve floor level
+    dragMesh.position.set(nx, ny, nz);
     const idx = placedMeshes.indexOf(dragMesh);
     if (idx !== -1) { placedItems[idx].x = nx; placedItems[idx].z = nz; }
   }
