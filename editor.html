@@ -325,24 +325,19 @@ function setFloor(floor) {
 
   if (floor === 'all') {
     renderer.clippingPlanes = [];
-    // Restore full camera range
-    controls.minPolarAngle = 0;
-    controls.maxPolarAngle = Math.PI / 2.05;
     camera.position.set(0, 28, 28);
     controls.target.set(0, 0, 0);
   } else if (floor === 'ground') {
-    // Clip everything above just above ceiling of ground floor
     clipAbove.constant = FIRST_FLOOR_Y + 0.2;
     renderer.clippingPlanes = [clipAbove];
-    // Camera: top-down-ish over ground floor centre
-    camera.position.set(0, 18, 22);
+    // Near-overhead plan view centred on house footprint
+    camera.position.set(0, 32, 4);
     controls.target.set(0, 0, 0);
   } else if (floor === 'first') {
-    // Clip everything below the first floor slab and above its ceiling
     clipBelow.constant = -(FIRST_FLOOR_Y - 0.1);
     renderer.clippingPlanes = [clipBelow];
-    // Camera: elevated to first floor level
-    camera.position.set(0, FIRST_FLOOR_Y + 18, 22);
+    // Same plan view but lifted to first floor level
+    camera.position.set(0, FIRST_FLOOR_Y + 28, 4);
     controls.target.set(0, FIRST_FLOOR_Y, 0);
   }
 
